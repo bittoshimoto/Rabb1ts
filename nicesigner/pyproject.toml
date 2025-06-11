@@ -1,0 +1,17 @@
+[build-system]
+requires = ["maturin>=0.14,<0.15"]
+build-backend = "maturin"
+
+[project]
+name = "nicesigner"
+dynamic = ["version"]
+requires-python = ">=3.10"
+license = { text = "MIT" }
+version = "0.1.0"
+dependencies = [
+  "bitcoin-utils==0.7.1",
+  "mnemonic==0.21",
+]
+
+[tool.maturin]
+strip = true
