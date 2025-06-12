@@ -2,6 +2,7 @@ import threading
 import queue
 import json
 import time
+import hashlib
 
 import requests
 
@@ -76,7 +77,6 @@ class RSFetcher:
             try:
                 block = self.fetcher.get_block_non_blocking()
             except Exception as e:
-                print(f"Error fetching block: {e}")
                 if stopped_event.wait(timeout=0.2):
                     break
                 continue
@@ -87,7 +87,6 @@ class RSFetcher:
                     break
                 continue
 
-            # Process the block
             block["tx"] = block.pop("transactions")
             
             # Try to add to queue with timeout
@@ -158,7 +157,6 @@ def rpc_call(method, params):
             timeout=Config()["REQUESTS_TIMEOUT"],
         ).json()
         if "error" in response and response["error"]:
-            print(response)
             raise BitcoindRPCError(f"Error calling {method}: {response['error']}")
         return response["result"]
     except (
@@ -186,8 +184,128 @@ def deserialize_block(block_hex, block_index):
     return decoded_block
 
 
+def adapt_auxpow_block(block_json):
+    """
+    Adapt AuxPoW block JSON from bitd to the unified block structure expected by the parser.
+    This includes:
+    - Adding 'is_op_return' to each vout (True if output is OP_RETURN)
+    - Calculating and adding 'zero_count' to each transaction (number of leading zeros in txid)
+    - Adding 'max_zero_count' to the block (max zero_count in block)
+    - Renaming 'txid' to 'tx_id' and 'hash' to 'tx_hash' (and converting tx_id to bytes)
+    - Generating 'utxo_id' for each vin and vout (8 bytes: first 8 bytes of SHA256(txid_bytes + n_bytes))
+    """
+    block = {
+        "height": block_json["height"],
+        "block_hash": block_json["hash"],
+        "tx": block_json["tx"],
+        "auxpow": block_json["auxpow"],
+        "time": block_json.get("time"),
+        "previousblockhash": block_json.get("previousblockhash"),
+        "nextblockhash": block_json.get("nextblockhash"),
+    }
+
+    # Add 'is_op_return' to each vout
+    for tx in block["tx"]:
+        for vout in tx["vout"]:
+            script_hex = vout.get("scriptPubKey", {}).get("hex", "")
+            script_asm = vout.get("scriptPubKey", {}).get("asm", "")
+            vout["is_op_return"] = script_hex.startswith("6a") or script_asm.startswith("OP_RETURN")
+
+    # Calculate and add 'zero_count' to each tx, and 'max_zero_count' to block
+    def count_leading_zeros(hex_str):
+        count = 0
+        for c in hex_str:
+            if c == '0':
+                count += 1
+            else:
+                break
+        return count
+    max_zero_count = 0
+    for tx in block["tx"]:
+        txid = tx.get("txid") or tx.get("tx_id")
+        if txid is not None:
+            zero_count = count_leading_zeros(txid)
+            tx["zero_count"] = zero_count
+            if zero_count > max_zero_count:
+                max_zero_count = zero_count
+        else:
+            tx["zero_count"] = 0
+    block["max_zero_count"] = max_zero_count
+
+    # Rename 'txid' to 'tx_id' (as bytes) and 'hash' to 'tx_hash' for parser compatibility
+    for tx in block["tx"]:
+        if "txid" in tx:
+            tx["tx_id"] = bytes.fromhex(tx.pop("txid"))
+        elif "tx_id" in tx and isinstance(tx["tx_id"], str):
+            tx["tx_id"] = bytes.fromhex(tx["tx_id"])
+        if "hash" in tx:
+            tx["tx_hash"] = tx.pop("hash")
+
+    # Generate 'utxo_id' for each vin and vout (8 bytes: first 8 bytes of SHA256(txid_bytes + n_bytes))
+    def make_utxo_id(txid_bytes, n):
+        n_bytes = n.to_bytes(4, "little")
+        h = hashlib.sha256(txid_bytes + n_bytes).digest()
+        return h[:8]
+    for tx in block["tx"]:
+        for vout in tx["vout"]:
+            vout["utxo_id"] = make_utxo_id(tx["tx_id"], vout["n"])
+        for vin in tx["vin"]:
+            if "coinbase" in vin:
+                vin["utxo_id"] = b"coinbase"
+            else:
+                prev_txid_bytes = bytes.fromhex(vin["txid"])
+                vin["utxo_id"] = make_utxo_id(prev_txid_bytes, vin["vout"])
+    return block
+
+
 def get_block_rpc(block_height):
-    block_hash = rpc_call("getblockhash", [block_height])
-    raw_block = rpc_call("getblock", [block_hash, 0])
-    decoded_block = deserialize_block(raw_block, block_height)
-    return decoded_block
+    """
+    Fetch a block by height, handling both normal and AuxPoW blocks.
+    Returns None if the requested height is out of range (end of chain).
+    """
+    try:
+        block_hash = rpc_call("getblockhash", [block_height])
+    except BitcoindRPCError as e:
+        if "Block height out of range" in str(e):
+            # End of chain reached, stop fetching
+            return None
+        else:
+            raise
+    if block_height >= 1074:
+        block_json = rpc_call("getblock", [block_hash, 2])
+        if "auxpow" in block_json:
+            return adapt_auxpow_block(block_json)
+        else:
+            raw_block = rpc_call("getblock", [block_hash, 0])
+            decoded_block = deserialize_block(raw_block, block_height)
+            return decoded_block
+    else:
+        raw_block = rpc_call("getblock", [block_hash, 0])
+        decoded_block = deserialize_block(raw_block, block_height)
+        return decoded_block
+
+
+class PurePythonFetcher:
+    def __init__(self, start_height=0):
+        self.current_height = start_height
+
+    def get_next_block(self, timeout=1.0):
+        """
+        Fetch the next block using get_block_rpc, handling AuxPoW and normal blocks.
+        """
+        block = get_block_rpc(self.current_height + 1)
+        if block is not None:
+            self.current_height += 1
+        return block
+
+# Example usage (replace RSFetcher with PurePythonFetcher for blocks >= 1074):
+#
+# if start_height < 1074:
+#     fetcher = RSFetcher(start_height)
+# else:
+#     print("[DEBUG] Switching to PurePythonFetcher for AuxPoW blocks")
+#     fetcher = PurePythonFetcher(start_height)
+#
+# Then use fetcher.get_next_block() in your main loop.
+#
+# You can implement logic in your main parse loop to switch fetchers at block 1074.
