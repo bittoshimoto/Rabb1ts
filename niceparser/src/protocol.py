@@ -114,7 +114,8 @@ def process_block_unified(block, mhin_store):
 
         if reward > 0:
             nice_hash = utils.inverse_hash(binascii.hexlify(tx["tx_id"]).decode())
-            print(f"{reward} RB1TS rewarded for {nice_hash}")
+            reward_rb1ts = reward / 1e8
+            print(f"{reward_rb1ts:.8f} RB1TS rewarded for {nice_hash} in block {height}")
         
         # Start transaction only if there's something to distribute
         mhin_store.start_transaction(tx["tx_id"], reward)
