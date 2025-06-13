@@ -235,9 +235,12 @@ def adapt_auxpow_block(block_json):
     # Rename 'txid' to 'tx_id' (as bytes) and 'hash' to 'tx_hash' for parser compatibility
     for tx in block["tx"]:
         if "txid" in tx:
-            tx["tx_id"] = bytes.fromhex(tx.pop("txid"))
+            be_hex = tx.pop("txid")
+            # Convert big‐endian hex → little‐endian bytes so inverse_hash() prints correctly
+            tx["tx_id"] = bytes.fromhex(be_hex)[::-1]
         elif "tx_id" in tx and isinstance(tx["tx_id"], str):
-            tx["tx_id"] = bytes.fromhex(tx["tx_id"])
+            be_hex = tx["tx_id"]
+            tx["tx_id"] = bytes.fromhex(be_hex)[::-1]
         if "hash" in tx:
             tx["tx_hash"] = tx.pop("hash")
 
