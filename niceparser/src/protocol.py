@@ -94,8 +94,10 @@ def process_block_unified(block, mhin_store):
     mhin_store.start_block(height, block["block_hash"])
 
     for tx in block["tx"]:
-        # exclude coinbase
-        if "coinbase" in tx["vin"][0]:
+        # exclude coinbase (robust for all block types)
+        if tx.get("coinbase", False):
+            continue
+        if "vin" in tx and isinstance(tx["vin"], list) and len(tx["vin"]) > 0 and "coinbase" in tx["vin"][0]:
             continue
 
         # exclude op_return
