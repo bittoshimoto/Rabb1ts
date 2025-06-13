@@ -21,7 +21,10 @@ class RSFetcher:
                 "db_dir": Config()["FETCHER_DB"],
                 "start_height": start_height,
                 "log_file": "/tmp/fetcher.log",
-                "only_write_in_reorg_window": True,   
+                "only_write_in_reorg_window": True,
+                "batch_size": Config()["BATCH_SIZE"],
+                "address_version": Config()["ADDRESS_VERSION"],
+                "p2sh_address_version": Config()["P2SH_ADDRESS_VERSION"],   
             }
         )
         self.fetcher.start()
@@ -232,13 +235,9 @@ def adapt_auxpow_block(block_json):
     # Rename 'txid' to 'tx_id' (as bytes) and 'hash' to 'tx_hash' for parser compatibility
     for tx in block["tx"]:
         if "txid" in tx:
-            be_hex = tx.pop("txid")
-            # Convert big‐endian hex → little‐endian bytes so inverse_hash() prints correctly
-            tx["tx_id"] = bytes.fromhex(be_hex)[::-1]
+            tx["tx_id"] = bytes.fromhex(tx.pop("txid"))
         elif "tx_id" in tx and isinstance(tx["tx_id"], str):
-            be_hex = tx["tx_id"]
-            tx["tx_id"] = bytes.fromhex(be_hex)[::-1]
-
+            tx["tx_id"] = bytes.fromhex(tx["tx_id"])
         if "hash" in tx:
             tx["tx_hash"] = tx.pop("hash")
 
