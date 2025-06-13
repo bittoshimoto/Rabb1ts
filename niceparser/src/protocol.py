@@ -7,14 +7,14 @@ from nicefetcher import utils
 
 def calculate_reward(zero_count, max_zero_count):
     """
-    Calculates the reward based on the number of zeros
+    Calculates the reward based on the number of leading zeros.
 
     Args:
-        zero_count (int): Number of zeros at the beginning of the hash
-        max_zero_count (int): Maximum number of zeros observed
+        zero_count (int): Number of zeros at the beginning of the txid
+        max_zero_count (int): Highest zero_count observed in this block
 
     Returns:
-        int: Reward amount
+        int: Reward amount in atomic units
     """
     if zero_count < Config()["MIN_ZERO_COUNT"]:
         return 0
@@ -24,14 +24,14 @@ def calculate_reward(zero_count, max_zero_count):
 
 def calculate_distribution(value, output_values):
     """
-    Calculates the distribution of values among multiple outputs
+    Distributes a total value among outputs proportionally.
 
     Args:
-        value (int): Total value to distribute
-        output_values (list): List of output values to use for weighting the distribution
+        value (int): Total amount to distribute
+        output_values (list[int]): Values of the candidate outputs
 
     Returns:
-        list: List of distributed amounts
+        list[int]: Per-output distributed amounts
     """
     total_output = sum(output_values)
     if total_output == 0:
@@ -43,6 +43,7 @@ def calculate_distribution(value, output_values):
     ]
     total_distributed = sum(distribution)
 
+    # if there's a remainder, give it to the first output
     if total_distributed < value:
         distribution[0] += value - total_distributed
 
@@ -51,90 +52,99 @@ def calculate_distribution(value, output_values):
 
 def generate_movements(tx, quantity, output_values):
     """
-    Generates fund movements for a transaction
+    Builds the list of UTXO movements (where to credit).
 
     Args:
-        tx (dict): Transaction information
-        quantity (int): Total quantity to distribute
-        output_values (list): Output values for weighting
+        tx (dict): Transaction dict
+        quantity (int): Total amount to distribute (inputs + reward)
+        output_values (list[int]): Values of tx["vout"] for weighting
 
     Returns:
-        list: List of generated movements
+        list[dict]: Each with keys "utxo_id" and "quantity"
     """
     movements = []
     distribution = calculate_distribution(quantity, output_values)
-    
-    # Identifier tous les outputs non-OP_RETURN
+
+    # select only non-OP_RETURN outputs
     valid_outputs = [out for out in tx["vout"] if not out["is_op_return"]]
-    
-    # Si plus d'un output valide, exclure le dernier
+
+    # if more than one, drop the last one from distribution
     if len(valid_outputs) > 1:
         valid_outputs = valid_outputs[:-1]
-    
-    # Créer des mouvements uniquement pour les outputs que nous voulons distribuer
+
     for i, out in enumerate(valid_outputs):
-        if i < len(distribution):  # Vérification supplémentaire
+        if i < len(distribution):
             movements.append({
                 "utxo_id": out["utxo_id"],
                 "quantity": distribution[i],
             })
-    
+
     return movements
 
 
 def process_block_unified(block, mhin_store):
     """
-    Processes a block using the MhinStore interface
+    Process a block: compute rewards, roll inputs/rewards forward,
+    and write everything into the MhinStore.
 
     Args:
-        block (dict): Block data to process
-        mhin_store (MhinStore): MhinStore instance for storage and indexing
+        block (dict): Block dict from the fetcher
+        mhin_store (MhinStore): Storage/indexing backend
     """
     height = block["height"]
     mhin_store.start_block(height, block["block_hash"])
 
     for tx in block["tx"]:
-        # exclude coinbase
+        # skip coinbase
         if "coinbase" in tx["vin"][0]:
             continue
 
-        # exclude op_return
+        # collect non-OP_RETURN outputs
         output_values = [out["value"] for out in tx["vout"] if not out["is_op_return"]]
-        if len(output_values) < 1:
+        if not output_values:
             continue
-        # don't distribute to the last output if there are more than one
+
+        # if there are multiple UTXOs, drop the last one from reward distribution
         if len(output_values) > 1:
             output_values.pop()
 
-        # reward movements
         zero_count = tx["zero_count"]
-        reward = 0
-        if zero_count >= Config()["MIN_ZERO_COUNT"]:
-            reward = calculate_reward(zero_count, block["max_zero_count"])
+        max_zero = block["max_zero_count"]
 
+        # DEBUG: show every tx that meets the minimum zero threshold
+        if zero_count >= Config()["MIN_ZERO_COUNT"]:
+            nice_hash = utils.inverse_hash(
+                binascii.hexlify(tx["tx_id"]).decode()
+            )
+            print(
+                f"DEBUG: block {height} tx {nice_hash} → "
+                f"zero_count={zero_count}, max_zero_count={max_zero}"
+            )
+
+        # compute reward
+        reward = calculate_reward(zero_count, max_zero)
         if reward > 0:
-            nice_hash = utils.inverse_hash(binascii.hexlify(tx["tx_id"]).decode())
-            print(f"{reward} RB1TS rewarded for {nice_hash}")
-        
-        # Start transaction only if there's something to distribute
+            nice_hash = utils.inverse_hash(
+                binascii.hexlify(tx["tx_id"]).decode()
+            )
+            print(f"{reward} RB1TS rewarded for {nice_hash} (block {height})")
+
+        # start the transaction in MhinStore (even if reward is zero, to handle UTXO movements)
         mhin_store.start_transaction(tx["tx_id"], reward)
 
-        # Collect inputs
+        # gather inputs
         total_in = 0
         for vin in tx["vin"]:
-            balance = mhin_store.pop_balance(vin["utxo_id"])
-            total_in += balance
+            total_in += mhin_store.pop_balance(vin["utxo_id"])
 
-        # Distribute reward + inputs
-        total_to_distribute = reward + total_in
+        # distribute inputs + reward
+        total_to_distribute = total_in + reward
         if total_to_distribute > 0:
             movements = generate_movements(tx, total_to_distribute, output_values)
-            for movement in movements:
-                if movement["quantity"] > 0:
-                    mhin_store.add_balance(movement["utxo_id"], movement["quantity"])
+            for mv in movements:
+                if mv["quantity"] > 0:
+                    mhin_store.add_balance(mv["utxo_id"], mv["quantity"])
 
-        # End the current transaction
         mhin_store.end_transaction()
 
-    # End the block
     mhin_store.end_block()

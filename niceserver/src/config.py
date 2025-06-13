@@ -10,7 +10,7 @@ if not os.path.exists(DATA_DIR):
 CONFIG = {
     "mainnet": {
         "DATA_DIR": DATA_DIR,
-        "BACKEND_URL": "http://rpc:rpc@localhost:33318",
+        "BACKEND_URL": "http://rpc:rpc@localhost:9876",
         "BACKEND_SSL_NO_VERIFY": True,
         "REQUESTS_TIMEOUT": 10,
         "FETCHER_DB": os.path.join(DATA_DIR, "fetcherdb"),
