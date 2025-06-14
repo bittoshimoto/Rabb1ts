@@ -61,7 +61,7 @@ def get_shard_id(utxo_id):
 
 
 # Work function for the shard process
-# Remplacer la fonction shard_worker_process dans mhindatabase.py
+# Remplacer la fonction shard_worker_process dans rb1tsdatabase.py
 
 def shard_worker_process(shard_id, db_path, task_queue, result_queue, stop_event):
     """Process function for shard worker"""
@@ -231,14 +231,14 @@ def shard_worker_process(shard_id, db_path, task_queue, result_queue, stop_event
             pass  # Ignorer les erreurs lors de l'envoi final
 
 
-class MhinDatabase:
+class Rb1tsDatabase:
     """
     Class to handle database operations for indexing
     """
 
     def __init__(self, base_path):
         self.base_path = base_path
-        self.database_path = f"{base_path}/mhin_indexes.db"
+        self.database_path = f"{base_path}/rb1ts_indexes.db"
         self.db = None
         self.last_indexed_block = 0
 
@@ -292,7 +292,7 @@ class MhinDatabase:
         """)
 
         first_hash = utils.inverse_hash(
-            "001dfe40d4977c64e99edfe2a87771a1e6ebc590bde3f9bb3bdb32b7367886ed"
+            "00ff2e67b582495208e0124e13f0e596c341de92d71ba18b58adbc7bac3a2bb3"
         )
         cursor.execute(
             """
@@ -325,7 +325,7 @@ class MhinDatabase:
             self.last_indexed_block = row["height"]
 
         print(
-            f"MhinDatabase initialized. Last indexed block: {self.last_indexed_block}"
+            f"Rb1tsDatabase initialized. Last indexed block: {self.last_indexed_block}"
         )
 
     def _start_shard_processes(self):

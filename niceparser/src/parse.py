@@ -2,7 +2,7 @@ import time
 import sys
 import signal
 
-from mhinstore import MhinStore
+from rb1tsstore import Rb1tsStore
 from config import Config
 from protocol import process_block_unified
 from fetcher import RSFetcher, PurePythonFetcher
@@ -18,10 +18,10 @@ def parse():
     try:
         # Initialize storage and indexing system
         Config().set_network("mainnet")
-        mhin_store = MhinStore(base_path=Config()["BALANCES_STORE"])
+        rb1ts_store = Rb1tsStore(base_path=Config()["BALANCES_STORE"])
 
         # Get the last indexed block height
-        current_height = mhin_store.get_last_indexed_block()
+        current_height = rb1ts_store.get_last_indexed_block()
 
         # If the system has already processed blocks, continue from there
         if current_height > 0:
@@ -39,7 +39,7 @@ def parse():
 
         # Enregistrer les ressources à fermer avec la méthode correcte pour chaque ressource
         shutdown_mgr.register_resource(fetcher, "Block Fetcher", close_method="stop", timeout=10, priority=1)
-        shutdown_mgr.register_resource(mhin_store, "MhinStore", close_method="close", timeout=20, priority=2)
+        shutdown_mgr.register_resource(rb1ts_store, "Rb1tsStore", close_method="close", timeout=20, priority=2)
 
         # Variables for performance tracking
         start_time_1000 = time.time()
@@ -81,7 +81,7 @@ def parse():
                 # Handling blockchain reorganizations
                 while block["height"] < current_height + 1:
                     print(f"Reorganization detected, rolling back block {current_height}")
-                    mhin_store.rollback_block(current_height)
+                    rb1ts_store.rollback_block(current_height)
                     current_height -= 1
 
                 # Verify height consistency
@@ -89,7 +89,7 @@ def parse():
                 current_height = block["height"]
 
                 # Process the block
-                process_block_unified(block, mhin_store)
+                process_block_unified(block, rb1ts_store)
 
                 # Update performance statistics
                 counter += 1
@@ -102,7 +102,7 @@ def parse():
 
                 # Display progress
                 print(
-                    f"Block {block['height']} ({ellapsed:.2f}s) ({ellapsed_1000:.2f}s/1000) (last indexed: {mhin_store.get_last_indexed_block()})",
+                    f"Block {block['height']} ({ellapsed:.2f}s) ({ellapsed_1000:.2f}s/1000) (last indexed: {rb1ts_store.get_last_indexed_block()})",
                     end="\r",
                 )
                 

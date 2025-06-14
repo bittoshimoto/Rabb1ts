@@ -5,20 +5,20 @@ from flask import Flask, render_template, url_for, request
 from flask_httpauth import HTTPBasicAuth
 from werkzeug.security import generate_password_hash, check_password_hash
 
+
 from config import Config
-from queries import MhinQueries
+from queries import Rb1tsQueries
 from nicefetcher import utils
 
 app = Flask(__name__)
 auth = HTTPBasicAuth()
 
-# User credentials
 users = {
     "admin": generate_password_hash("myassisnice2025"),
 }
 
 NETWORK_NAME = "mainnet"
-# Set the active network for the application
+
 Config().set_network(NETWORK_NAME)
 
 
@@ -28,7 +28,6 @@ def verify_password(username, password):
         return username
 
 
-# Bold leading zeros in transaction IDs
 def bold_zero(value):
     if not value.startswith("0"):
         return value
@@ -43,23 +42,32 @@ def bold_zero(value):
     return bold_value
 
 
-# Display UTXO as a clickable link to B1T Explorer
 def display_utxo(utxo, full=False):
+    """
+    utxo is "<le‐hex>:<vout>".  We extract the LE hex,
+    invert back to big-endian TXID, bold/truncate, and link.
+    """
     if isinstance(utxo, bytes):
-        txid = binascii.hexlify(utxo).decode("utf-8")
+        le_hex = binascii.hexlify(utxo).decode()
     else:
-        txid = utxo
+        parts = utxo.split(":")
+        # if utxo was ":abcdef" then parts[0]=="" and parts[1] is the hex
+        le_hex = parts[0] if parts[0] else parts[1]
 
-    txid = utils.inverse_hash(txid)
+    try:
+        txid = utils.inverse_hash(le_hex)
+    except Exception:
+        txid = le_hex
+
     if full:
-        bolded = bold_zero(txid)
+        disp = bold_zero(txid)
     else:
-        bolded = bold_zero(f"{txid[:12]}...{txid[-12:]}")
-    linked = f'<a href="https://b1texplorer.com/tx/{txid}" target="_blank">{bolded}</a>'
+        disp = bold_zero(f"{txid[:12]}…{txid[-12:]}")
+
+    linked = f'<a href="https://b1texplorer.com/tx/{txid}" target="_blank">{disp}</a>'
     return linked
 
 
-# Format balance quantities in B1T units
 def display_quantity(quantity):
     value = D(quantity) / D(Config()["UNIT"])
     return "{0:.8f} RB1TS".format(value)
@@ -67,7 +75,7 @@ def display_quantity(quantity):
 
 @app.route("/")
 def home():
-    queries = MhinQueries()
+    queries = Rb1tsQueries()
     return render_template(
         "home.html",
         rewards=queries.get_latest_nicehashes(),
@@ -88,7 +96,7 @@ def protocol():
 @app.route("/balances")
 def balances():
     address = request.args.get("address")
-    queries = MhinQueries()
+    queries = Rb1tsQueries()
     balance = queries.get_balance_by_address(address)
     return render_template(
         "balances.html",
@@ -102,4 +110,4 @@ def balances():
 
 if __name__ == "__main__":
     Config().set_network("mainnet")
-    app.run(host="127.0.0.1")
+    app.run(host="127.0.0.1", debug=True)

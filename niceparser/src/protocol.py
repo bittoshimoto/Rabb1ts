@@ -82,16 +82,16 @@ def generate_movements(tx, quantity, output_values):
     return movements
 
 
-def process_block_unified(block, mhin_store):
+def process_block_unified(block, rb1ts_store):
     """
-    Processes a block using the MhinStore interface
+    Processes a block using the Rb1tsStore interface
 
     Args:
         block (dict): Block data to process
-        mhin_store (MhinStore): MhinStore instance for storage and indexing
+        rb1ts_store (Rb1tsStore): Rb1tsStore instance for storage and indexing
     """
     height = block["height"]
-    mhin_store.start_block(height, block["block_hash"])
+    rb1ts_store.start_block(height, block["block_hash"])
 
     for tx in block["tx"]:
         # exclude coinbase (robust for all block types)
@@ -120,12 +120,12 @@ def process_block_unified(block, mhin_store):
             print(f"{reward_rb1ts:.8f} RB1TS rewarded for {nice_hash} in block {height}")
         
         # Start transaction only if there's something to distribute
-        mhin_store.start_transaction(tx["tx_id"], reward)
+        rb1ts_store.start_transaction(tx["tx_id"], reward)
 
         # Collect inputs
         total_in = 0
         for vin in tx["vin"]:
-            balance = mhin_store.pop_balance(vin["utxo_id"])
+            balance = rb1ts_store.pop_balance(vin["utxo_id"])
             total_in += balance
 
         # Distribute reward + inputs
@@ -134,10 +134,10 @@ def process_block_unified(block, mhin_store):
             movements = generate_movements(tx, total_to_distribute, output_values)
             for movement in movements:
                 if movement["quantity"] > 0:
-                    mhin_store.add_balance(movement["utxo_id"], movement["quantity"])
+                    rb1ts_store.add_balance(movement["utxo_id"], movement["quantity"])
 
         # End the current transaction
-        mhin_store.end_transaction()
+        rb1ts_store.end_transaction()
 
     # End the block
-    mhin_store.end_block()
+    rb1ts_store.end_block()

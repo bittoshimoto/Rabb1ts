@@ -268,7 +268,7 @@ impl<'source> FromPyObject<'source> for Config {
         let p2sh_address_version = match dict.get_item("p2sh_address_version") {
             Ok(Some(item)) => item.extract::<Vec<u8>>()?,
             _ => match network {
-                Network::Mainnet => vec![0x16],
+                Network::Mainnet => vec![0x19],
                 Network::Testnet => vec![0xC4],
                 Network::Testnet4 => vec![0xC4],
                 Network::Regtest => vec![0xC4],

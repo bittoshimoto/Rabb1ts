@@ -10,7 +10,7 @@ def h2b(h):
     return binascii.unhexlify(h)
 
 
-class MhinStorage:
+class Rb1tsStorage:
     """
     Classe responsable de la gestion des fichiers .dat pour le stockage des blocs et des balances
     """
@@ -40,14 +40,14 @@ class MhinStorage:
             self.current_backup_file_num = 0
 
         # Open the current backup file in append mode
-        self.backup_file_path = f"{base_path}/mhin_{self.current_backup_file_num}.dat"
+        self.backup_file_path = f"{base_path}/rb1ts_{self.current_backup_file_num}.dat"
         self.backup_file = open(self.backup_file_path, "ab")
 
-        print(f"MhinStorage initialized. Current block: {self.current_block}")
+        print(f"Rb1tsStorage initialized. Current block: {self.current_block}")
 
     def _find_backup_files(self):
-        """Search for all mhin_*.dat files in the base directory"""
-        pattern = os.path.join(self.base_path, "mhin_*.dat")
+        """Search for all rb1ts_*.dat files in the base directory"""
+        pattern = os.path.join(self.base_path, "rb1ts_*.dat")
         files = glob.glob(pattern)
         return sorted(files, key=self._extract_file_num)
 
@@ -316,7 +316,7 @@ class MhinStorage:
             self.current_backup_file_num += 1
             self.backup_file.close()
             self.backup_file_path = (
-                f"{self.base_path}/mhin_{self.current_backup_file_num}.dat"
+                f"{self.base_path}/rb1ts_{self.current_backup_file_num}.dat"
             )
             self.backup_file = open(self.backup_file_path, "ab")
 
@@ -334,7 +334,7 @@ class MhinStorage:
             print(f"Cannot rollback: block {height} not found in block_index")
             return False
 
-        file_path = f"{self.base_path}/mhin_{file_num}.dat"
+        file_path = f"{self.base_path}/rb1ts_{file_num}.dat"
         try:
             with open(file_path, "rb") as f:
                 f.seek(position)
@@ -445,7 +445,7 @@ class MhinStorage:
                     prev_file_num, prev_position = self.block_index[prev_height]
 
                     # Open previous block file
-                    prev_file_path = f"{self.base_path}/mhin_{prev_file_num}.dat"
+                    prev_file_path = f"{self.base_path}/rb1ts_{prev_file_num}.dat"
                     with open(prev_file_path, "rb") as prev_f:
                         prev_f.seek(prev_position)
 

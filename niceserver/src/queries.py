@@ -85,7 +85,7 @@ class ShardedConnectionPool:
     def get_shard_pool(self, shard_id):
         """Get or create a connection pool for a specific shard"""
         if shard_id not in self.pools:
-            db_file = f"{self.base_path}/mhin_balances_{shard_id}.db"
+            db_file = f"{self.base_path}/rb1ts_balances_{shard_id}.db"
             print(f"Opening shard {shard_id} at {db_file}")
             self.pools[shard_id] = APSWConnectionPool(db_file)
         return self.pools[shard_id]
@@ -111,7 +111,7 @@ def utxo_to_utxo_id(txid, n):
     return bytes(utils.pack_utxo(inversed, n))
 
 
-class MhinQueries:
+class Rb1tsQueries:
     """
     Classe pour effectuer des requêtes sur les données RB1TS
     Remarque: Cette implémentation accède directement aux bases de données
@@ -121,7 +121,7 @@ class MhinQueries:
     def __init__(self, db_file=None):
         base_path = Config()["BALANCES_STORE"]
         if db_file is None:
-            db_file = f"{base_path}/mhin_indexes.db"
+            db_file = f"{base_path}/rb1ts_indexes.db"
         self.base_path = base_path
         self.pool = APSWConnectionPool(db_file)
         self.shard_pools = ShardedConnectionPool(base_path)
@@ -132,52 +132,69 @@ class MhinQueries:
         self._latest_nicehashes_cache = None
         self._latest_nicehashes_cache_block_height = 0
 
-    def get_balance_by_address(self, address):
+    def get_balance_by_address(self, address: str) -> dict:
         """
-        Fetch UTXOs for an address using the B1T explorer API,
-        then look up each UTXO’s balance in the local shards.
+        1) Fetch up to 100 recent txs for `address`
+        2) Keep only those whose txid starts with MIN_ZERO_COUNT zeros
+        3) For each, fetch vout list, pick unspent outputs paying `address`
+        4) Convert (txid, vout) → utxo_id and lookup its balance in the correct shard
         """
-
-        # Get UTXOs from b1texplorer.com’s public API
         try:
-            api_url = f"https://b1texplorer.com/ext/getaddress/{address}"
-            response = requests.get(api_url, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            utxos = data.get("utxos", [])
-        except requests.RequestException as e:
-            print(f"Error fetching UTXOs for address {address}: {e}")
-            return {"address": address, "total_balance": 0, "utxos": []}
+            url = f"https://b1texplorer.com/ext/getaddresstxs/{address}/0/100"
+            res = requests.get(url, timeout=10)
+            res.raise_for_status()
+            entries = res.json()
+        except Exception as e:
+            print(f"Explorer fetch error for {address}: {e}")
+            return {
+                "address": address,
+                "total_balance": 0,
+                "utxos": [],
+            }
 
-        # Use the explorer’s total balance, or fall back to summing local shards
-        total_balance = data.get("balance", 0)
-        utxo_details = []
+        min_zero = Config()["MIN_ZERO_COUNT"]
+        candidates = []
 
-        for utxo in utxos:
-            txid = utxo.get("txid")
-            vout = utxo.get("vout")
-
-            if not txid or vout is None:
+        for e in entries:
+            txid = e.get("txid") or e.get("hash")
+            if not txid or not txid.startswith("0" * min_zero):
+                continue
+            try:
+                raw_url = (
+                    f"https://b1texplorer.com/api/getrawtransaction"
+                    f"?txid={txid}&decrypt=1"
+                )
+                txj = requests.get(raw_url, timeout=10).json()
+            except Exception:
                 continue
 
-            # Convert to our internal utxo_id
-            utxo_id = utxo_to_utxo_id(txid, vout)
-            shard_id = get_shard_id(utxo_id)
+            for v in txj.get("vout", []):
+                spk = v.get("scriptPubKey", {})
+                if address in spk.get("addresses", []) and v.get("spentTxId") is None:
+                    sats = int(v.get("value", 0) * Config()["UNIT"])
+                    candidates.append((txid, v.get("n"), sats))
 
-            # Query the balance from the appropriate shard
-            with self.shard_pools.shard_connection(shard_id) as db:
-                cursor = db.cursor()
-                row = cursor.execute(
-                    "SELECT balance FROM balances WHERE utxo_id = ?",
-                    (utxo_id,)
-                ).fetchone()
+        total_balance = 0
+        utxo_details = []
 
-                if row:
-                    balance = row["balance"]
-                    utxo_details.append({
-                        "utxo":    f"{utils.inverse_hash(txid)}:{vout}",
-                        "balance": balance,
-                    })
+        for txid, vout, sats in candidates:
+            uid = utxo_to_utxo_id(txid, vout)
+            shard = get_shard_id(uid)
+            try:
+                with self.shard_pools.shard_connection(shard) as db:
+                    row = db.cursor().execute(
+                        "SELECT balance FROM balances WHERE utxo_id = ?", (uid,)
+                    ).fetchone()
+                bal = row["balance"] if row and "balance" in row else row[0] if row else 0
+            except apsw.SQLError:
+                bal = 0
+
+            total_balance += bal
+            le_hex = utils.inverse_hash(txid)
+            utxo_details.append({
+                "utxo":    f"{le_hex}:{vout}",
+                "balance": bal,
+            })
 
         return {
             "address":       address,

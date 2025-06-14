@@ -1,126 +1,187 @@
-import json
-import time
-import json
-
-import sh
-
+#!/usr/bin/env python3
+import json, time, math
+import requests, base58
 from bitcoinutils.transactions import Transaction
-from bitcoinutils.keys import P2wpkhAddress
-from bitcoinutils.hdwallet import HDWallet
-from bitcoinutils.setup import setup
+from bitcoinutils.setup        import setup
 
-from nicesigner import nicesigner
+#
+# ─── CONFIG ────────────────────────────────────────────────────────────────────
+#
+
+RPC_URL      = ""
+RPC_USER     = ""
+RPC_PASSWORD = ""
+
+ADDRESS      = ""
+PRIVATE_WIF  = ""
+
+TARGET        = 3      # leading zeroes required
+TOTAL_THREADS = 6     # locktime tweaks per round
+DUST          = 550    # sats minimum output
+
+# Fee rate: 0.01 B1T per kB → sats/byte
+MIN_FEE_PER_KB     = 0.01
+RATE_SAT_PER_BYTE  = (MIN_FEE_PER_KB * 1e8) / 1000  # =1000 sats/byte
+
+# Estimate TX size: 148B input + 34B output + 10B overhead
+TX_SIZE_EST        = 148 + 34 + 10  # ≈192 bytes
+
+# Compute base fee (rounded up)
+FEE = int(math.ceil(RATE_SAT_PER_BYTE * TX_SIZE_EST))
+print(f"Using fee={FEE} sats ({MIN_FEE_PER_KB} B1T/kB × {TX_SIZE_EST} B)")
+
+#
+# ─── END CONFIG ────────────────────────────────────────────────────────────────────
+#
 
 setup("mainnet")
 
-DUST_SIZE = 550
 
-RPC_USER = "rpc"
-RPC_PASSWORD = "rpc"
-TARGET = 6
-TOTAL_THREADS = 32
-
-bitcoin_cli = sh.bitcoin_cli.bake(
-    f"-rpcuser={RPC_USER}",
-    f"-rpcpassword={RPC_PASSWORD}",
-)
-
-
-def build_nice_transaction(mnemonic, utxo_txid, utxo_vout, utxo_value, utxo_path):
-    utxo_address = get_hdwallet_address(mnemonic, utxo_path)
-    script_pubkey = P2wpkhAddress(utxo_address).to_script_pub_key().to_hex()
-    inputs = f"{utxo_txid}:{utxo_vout}:{utxo_value}:{script_pubkey}:{utxo_path}"
-    outputs = ""
-
-    base_path = "m/84'/0'/0'/0"
-    first_thread = 0
-    num_threads = TOTAL_THREADS
-    total_threads = TOTAL_THREADS
-    target = TARGET
-    output_value = utxo_value - 330  # vsize 110 * 3
-    if output_value < DUST_SIZE:
-        raise ValueError("Output value is too low")
-
-    # Génération de la transaction
-    tx_hex, derivation_path = nicesigner.build_transaction(
-        inputs,
-        outputs,
-        mnemonic,
-        base_path,
-        first_thread,
-        num_threads,
-        total_threads,
-        target,
-        output_value,
-    )
-
-    return tx_hex, derivation_path, output_value
+def rpc(method, params=None):
+    payload = {"jsonrpc":"1.0","id":"miner","method":method,"params":params or []}
+    r = requests.post(RPC_URL, auth=(RPC_USER,RPC_PASSWORD),
+                      headers={"Content-Type":"application/json"},
+                      data=json.dumps(payload))
+    try:
+        r.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        raise RuntimeError(f"RPC HTTP {e.response.status_code}: {e.response.text}")
+    resp = r.json()
+    if resp.get("error"):
+        raise RuntimeError(f"RPC error: {resp['error']}")
+    return resp["result"]
 
 
-def get_hdwallet_address(mnemonic, derivation_path):
-    hdw = HDWallet(mnemonic=mnemonic)
-    hdw.from_path(derivation_path)
-    address = hdw.get_private_key().get_public_key().get_segwit_address().to_string()
-    return address
+def fetch_utxo_rpc():
+    """
+    Import our address as watch-only and listunspent via RPC.
+    Returns the largest UTXO > dust+fee as (txid, vout, sats, scriptPubKeyHex).
+    """
+    # watch-only import (idempotent)
+    try:
+        rpc("importaddress", [ADDRESS, "", False])
+    except RuntimeError:
+        pass
+
+    utxos = rpc("listunspent", [0, 9999999, [ADDRESS]])
+    candidates = []
+    for u in utxos:
+        sats = int(u["amount"] * 1e8)
+        if sats > DUST + FEE:
+            candidates.append((
+                u["txid"], 
+                u["vout"], 
+                sats, 
+                u["scriptPubKey"]
+            ))
+
+    if not candidates:
+        raise RuntimeError(f"No UTXOs > {DUST+FEE} sats; fund {ADDRESS} and retry.")
+
+    # return the largest
+    return max(candidates, key=lambda x: x[2])
 
 
-def backup_tx(batch_name, txid, derivation_path, utxo_value, tx_hex):
-    with open(f"{batch_name}-{txid}.json", "w") as f:
-        json.dump(
-            {
-                "txid": txid,
-                "raw_tx": tx_hex,
-                "path": derivation_path,
-                "value": utxo_value,
-            },
-            f,
-        )
-    print(f"Backuped tx {txid} to {batch_name}-{txid}.json")
+def build_and_find(txid, vout, sats, script_hex):
+    round_idx = 0
+    while True:
+        for tweak in range(TOTAL_THREADS):
+            locktime = round_idx * TOTAL_THREADS + tweak
+
+            # create
+            raw = rpc("createrawtransaction", [
+                [{"txid":txid,"vout":vout,"sequence":0}],
+                {ADDRESS: (sats - FEE)/1e8},
+                locktime
+            ])
+            # sign
+            signed = rpc("signrawtransaction", [
+                raw,
+                [{"txid":txid,"vout":vout,"scriptPubKey":script_hex,"amount":sats/1e8}],
+                [PRIVATE_WIF]
+            ])
+            if not signed.get("complete"):
+                continue
+
+            hex_signed = signed["hex"]
+            tid = Transaction.from_raw(hex_signed).get_txid()
+            if tid.startswith("0"*TARGET):
+                return hex_signed, locktime
+
+        round_idx += 1
 
 
-def mint_mihn(
-    mnemonic, utxo_txid, utxo_vout, utxo_value, utxo_path, batch_name, counter=1
-):
-    next_utxo_txid = utxo_txid
-    next_utxo_vout = utxo_vout
-    next_utxo_value = utxo_value
-    next_utxo_path = utxo_path
-    while next_utxo_value > DUST_SIZE + 330:
-        tx_hex, next_utxo_path, next_utxo_value = build_nice_transaction(
-            mnemonic, next_utxo_txid, next_utxo_vout, next_utxo_value, next_utxo_path
-        )
-        tx = Transaction.from_raw(tx_hex)
-        next_utxo_txid = tx.get_txid()
-        next_utxo_vout = 0
-        while True:
-            try:
-                sent_txid = bitcoin_cli("sendrawtransaction", tx_hex).strip()
+def send_with_bump(hex_signed, txid, vout, sats, script_hex, locktime):
+    """
+    Try sendrawtransaction; on "insufficient priority", bump fee 50% and retry.
+    """
+    global FEE
+    try:
+        return rpc("sendrawtransaction", [hex_signed])
+    except RuntimeError as e:
+        err = str(e)
+        if "insufficient priority" in err:
+            old = FEE
+            FEE = int(math.ceil(FEE * 1.5))
+            print(f"↗️  Priority too low; bumping fee {old}->{FEE} sats and retrying…")
+            # rebuild & re-sign
+            raw2 = rpc("createrawtransaction", [
+                [{"txid":txid,"vout":vout,"sequence":0}],
+                {ADDRESS: (sats - FEE)/1e8},
+                locktime
+            ])
+            signed2 = rpc("signrawtransaction", [
+                raw2,
+                [{"txid":txid,"vout":vout,"scriptPubKey":script_hex,"amount":sats/1e8}],
+                [PRIVATE_WIF]
+            ])
+            if not signed2.get("complete"):
+                raise RuntimeError("Re-sign after fee bump failed")
+            return rpc("sendrawtransaction", [signed2["hex"]])
+        raise
+
+
+def backup(batch, txid, locktime, sats, raw):
+    fn = f"{batch}-{txid}.json"
+    with open(fn,"w") as f:
+        json.dump({
+            "txid": txid,
+            "locktime": locktime,
+            "value": sats,
+            "raw": raw
+        }, f, indent=2)
+    print(f"[backup] {fn}")
+
+
+def mine_one(batch_name="mybatch"):
+    # 1) pick the freshest UTXO from RPC
+    txid, vout, sats, script_hex = fetch_utxo_rpc()
+    print("Mining single tx from UTXO:", txid, vout, sats, "sats")
+
+    # 2) hunt for a matching locktime
+    hex_signed, locktime = build_and_find(txid, vout, sats, script_hex)
+    print(f"✅ Found nice TX (locktime={locktime})")
+
+    # 3) broadcast, retry on priority, accept already-spent
+    while True:
+        try:
+            sent = send_with_bump(hex_signed, txid, vout, sats, script_hex, locktime)
+            break
+        except Exception as e:
+            msg = str(e)
+            if "bad-txns-inputs-spent" in msg:
+                sent = Transaction.from_raw(hex_signed).get_txid()
+                print(f"⚠️ Inputs already spent; assuming TX {sent} is live.")
                 break
-            except sh.ErrorReturnCode_26 as e:
-                print("Resending tx in 2 minutes...")
-                time.sleep(120)
-        backup_tx(
-            f"{batch_name}-{counter}",
-            next_utxo_txid,
-            next_utxo_path,
-            next_utxo_value,
-            tx_hex,
-        )
-        print(f"Sent tx {sent_txid}")
-        assert sent_txid == next_utxo_txid
-        counter += 1
+            print(f"⚠️ Broadcast error: {e}\n→ retrying in 2 minutes…")
+            time.sleep(120)
+
+    # 4) done
+    assert sent == Transaction.from_raw(hex_signed).get_txid()
+    backup(batch_name, sent, locktime, sats - FEE, hex_signed)
+    print(f"🎉 Broadcast TX {sent}; exiting.")
 
 
-
-# use genwallet.py to generate mnemonic and address
-mnemonic = "addict weather world sense idle purity rich wagon ankle fall cheese spatial"
-address_path = "m/84'/0'/0'/0/1"
-
-txid = "" # utxo txid
-vout = 0 # utxo vout
-value = 84807 # utxo value
-
-batch_name = "mybatch"
-
-
-mint_mihn(mnemonic, txid, vout, value, address_path, batch_name)
+if __name__ == "__main__":
+    import sys
+    mine_one(sys.argv[1] if len(sys.argv)>1 else "mybatch")

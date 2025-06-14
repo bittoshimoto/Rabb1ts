@@ -1,17 +1,17 @@
 import os
-from mhinstorage import MhinStorage
-from mhindatabase import MhinDatabase
+from rb1tsstorage import Rb1tsStorage
+from rb1tsdatabase import Rb1tsDatabase
 
 
-class MhinStore:
+class Rb1tsStore:
     """
-    Unified class that coordinates MhinStorage and MhinDatabase
+    Unified class that coordinates Rb1tsStorage and Rb1tsDatabase
     for efficient block management and indexing
     """
 
     def __init__(self, base_path):
         """
-        Initializes the MhinStore instance
+        Initializes the Rb1tsStore instance
 
         Args:
             base_path (str): Base path for files and databases
@@ -22,8 +22,8 @@ class MhinStore:
         os.makedirs(base_path, exist_ok=True)
 
         # Initialize components
-        self.storage = MhinStorage(base_path)
-        self.database = MhinDatabase(base_path)
+        self.storage = Rb1tsStorage(base_path)
+        self.database = Rb1tsDatabase(base_path)
 
         # Information about the current block
         self.current_block = 0
