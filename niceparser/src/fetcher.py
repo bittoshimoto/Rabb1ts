@@ -21,10 +21,7 @@ class RSFetcher:
                 "db_dir": Config()["FETCHER_DB"],
                 "start_height": start_height,
                 "log_file": "/tmp/fetcher.log",
-                "only_write_in_reorg_window": True,
-                "batch_size": Config()["BATCH_SIZE"],
-                "address_version": Config()["ADDRESS_VERSION"],
-                "p2sh_address_version": Config()["P2SH_ADDRESS_VERSION"],   
+                "only_write_in_reorg_window": True, 
             }
         )
         self.fetcher.start()
