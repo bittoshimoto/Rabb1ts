@@ -8,14 +8,15 @@ from bitcoinutils.setup        import setup
 # ─── CONFIG ────────────────────────────────────────────────────────────────────
 #
 
-RPC_URL      = ""
-RPC_USER     = ""
-RPC_PASSWORD = ""
+RPC_URL      = "http://127.0.0.1:9876/"
+RPC_USER     = "rpc"
+RPC_PASSWORD = "rpc"
 
 ADDRESS      = ""
 PRIVATE_WIF  = ""
 
-TARGET        = 3      # leading zeroes required
+
+TARGET        = 4      # leading zeroes required
 TOTAL_THREADS = 6     # locktime tweaks per round
 DUST          = 550    # sats minimum output
 

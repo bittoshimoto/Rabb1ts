@@ -1,311 +1,244 @@
+# niceparser/src/fetcher.py
+
 import threading
 import queue
 import json
 import time
-import hashlib
-
 import requests
-
-from nicefetcher import indexer
+import xxhash
 
 from config import Config
 
+def hash_string_and_number(input_bytes: bytes, input_num: int) -> bytes:
+    # concatenate bytes + 8-byte little-endian number
+    combined = input_bytes + input_num.to_bytes(8, "little")
+    # xxh3_64 returns an integer
+    h = xxhash.xxh3_64_intdigest(combined)
+    # pack into 8-byte little endian
+    return h.to_bytes(8, "little")
+
+class BitcoindRPCError(Exception):
+    pass
+
+def rpc_call(method, params):
+    """
+    Call your daemon via JSON-RPC, return the 'result' or raise.
+    """
+    cfg = Config()
+    payload = {
+        "method":  method,
+        "params":  params,
+        "jsonrpc": "2.0",
+        "id":      0,
+    }
+    r = requests.post(
+        cfg["BACKEND_URL"],
+        data=json.dumps(payload),
+        headers={"content-type": "application/json"},
+        auth=("rpc", "rpc"),
+        timeout=cfg["REQUESTS_TIMEOUT"],
+        verify=not cfg["BACKEND_SSL_NO_VERIFY"],
+    )
+    r.raise_for_status()
+    resp = r.json()
+    if resp.get("error"):
+        raise BitcoindRPCError(f"RPC error {resp['error']}")
+    return resp["result"]
+
+def deserialize_block(block_hex, block_index):
+    """
+    Pure-Python stand-in for indexer.Deserializer.parse_block:
+    """
+    return {
+        "hex":          block_hex,
+        "height":       block_index,
+        "transactions": []
+    }
+
+def get_block_rpc(block_height):
+    """
+    Fetch & decode a block at `block_height`, falling back from verbosity=2
+    to raw-hex + deserializer if needed.
+    """
+    bh = rpc_call("getblockhash", [block_height])
+
+    try:
+        # Try JSON first (verbosity=2 strips AuxPoW envelope)
+        blk = rpc_call("getblock", [bh, 2])
+        transactions = blk.pop("tx", [])
+    except BitcoindRPCError:
+        # Fallback: get raw hex and deserialize via your Python wrapper
+        raw_hex = rpc_call("getblock", [bh, 0])
+        decoded = deserialize_block(raw_hex, block_height)
+        # decoded includes 'transactions' as decoded["tx"]
+        blk = decoded
+        transactions = blk.pop("transactions", [])
+
+    # inject the fields your parser expects
+    blk["block_hash"]   = bh
+    blk["height"]       = block_height
+    blk["transactions"] = transactions
+
+    return blk
 
 class RSFetcher:
     def __init__(self, start_height=0):
-        self.fetcher = indexer.Indexer(
-            {
-                "rpc_address": Config()["BACKEND_URL"],
-                "rpc_user": "rpc",
-                "rpc_password": "rpc",
-                "db_dir": Config()["FETCHER_DB"],
-                "start_height": start_height,
-                "log_file": "/tmp/fetcher.log",
-                "only_write_in_reorg_window": True, 
-            }
-        )
-        self.fetcher.start()
         self.prefeteched_block = queue.Queue(maxsize=10)
         self.prefetched_count = 0
         self.stopped_event = threading.Event()
+        self.start_height = start_height
+        self.next_height  = start_height
         self.executors = []
-        for _i in range(1):
-            executor = threading.Thread(
-                target=self.prefetch_block, args=(self.stopped_event,)
-            )
-            executor.daemon = True
-            executor.start()
-            self.executors.append(executor)
+
+        executor = threading.Thread(
+            target=self.prefetch_block, args=(self.stopped_event,),
+            daemon=True
+        )
+        executor.start()
+        self.executors.append(executor)
 
     def get_next_block(self, timeout=1.0):
         """
-        Get the next block from the queue
-        
-        Args:
-            timeout (float): Timeout in seconds to wait for a block
-            
-        Returns:
-            dict or None: Block data or None if no block is available or if stopped
+        Get the next block from the queue.
         """
         if self.stopped_event.is_set():
-            return None  # Return None immediately if stopped
-            
+            return None
         try:
             return self.prefeteched_block.get(timeout=timeout)
         except queue.Empty:
-            return None  # Return None if no block is available within timeout
+            return None
 
     def prefetch_block(self, stopped_event):
         """
-        Thread function that prefetches blocks
-        
-        Args:
-            stopped_event (threading.Event): Event to signal thread to stop
+        Thread function that prefetches blocks, waiting for new heights
+        instead of hammering RPC when ahead of tip.
         """
         while not stopped_event.is_set():
-            # Check the queue size and skip if full
-            if self.prefeteched_block.qsize() >= 8:  # Marge de sécurité par rapport à maxsize=10
-                # Add sleep to prevent CPU spinning
-                if stopped_event.wait(timeout=0.2):  # Vérifie l'arrêt toutes les 0.2 secondes
-                    break  # Exit immediately if stopped
-                continue
-
-            # Get a block (non-blocking)
+            # 0) Don’t fetch past the current tip
             try:
-                block = self.fetcher.get_block_non_blocking()
+                tip = rpc_call("getblockcount", [])
             except Exception as e:
-                if stopped_event.wait(timeout=0.2):
+                print(f"Error fetching tip: {e}")
+                if stopped_event.wait(timeout=1):
                     break
                 continue
-                
-            # If no block available, wait and continue
-            if block is None:
+
+            if self.next_height > tip:
+                # Wait until a new block arrives
+                if stopped_event.wait(timeout=5):
+                    break
+                continue
+
+            # 1) Throttle if queue nearly full
+            if self.prefeteched_block.qsize() >= 8:
                 if stopped_event.wait(timeout=0.2):
                     break
                 continue
 
-            block["tx"] = block.pop("transactions")
-            
-            # Try to add to queue with timeout
-            attempt_count = 0
-            while not stopped_event.is_set() and attempt_count < 5:  # Limite les tentatives
+            # 2) Fetch the block
+            height = self.next_height
+            try:
+                block = get_block_rpc(height)
+            except Exception as e:
+                print(f"Error fetching block {height}: {e}")
+                if stopped_event.wait(timeout=0.2):
+                    break
+                continue
+
+            # 3) Extract and rename transactions
+            txs = block.pop("transactions", [])
+            normalized = []
+            for tx in txs:
+                # Precompute LE tx_id bytes
+                txid_hex = tx.get("txid", "")
                 try:
-                    # Réduire le timeout pour être plus réactif à l'arrêt
-                    success = self.prefeteched_block.put(block, timeout=0.5)
+                    be = bytes.fromhex(txid_hex)
+                    tx_bytes = be[::-1]            # big-endian → little-endian
+                except Exception:
+                    tx_bytes = b""
+
+                # Normalize vouts (unchanged)
+                vouts = []
+                for v in tx.get("vout", []):
+                    is_op = v.get("scriptPubKey", {}).get("type") == "nulldata"
+                    out_entry = {
+                        "n":            v.get("n"),
+                        "value":        v.get("value"),
+                        "is_op_return": is_op,
+                    }
+                    out_entry["utxo_id"] = hash_string_and_number(tx_bytes, out_entry["n"])
+                    vouts.append(out_entry)
+
+                # Compute zero_count (unchanged)
+                zero_count = 0
+                for c in txid_hex:
+                    if c == "0":
+                        zero_count += 1
+                    else:
+                        break
+
+                # Normalize vins with LE utxo_id
+                vins = []
+                for vin in tx.get("vin", []):
+                    prev_txid_hex = vin.get("txid", "")
+                    prev_vout     = vin.get("vout", 0)
+                    try:
+                        be_prev = bytes.fromhex(prev_txid_hex)
+                        prev_txid_bytes = be_prev[::-1]   # big-endian → little-endian
+                    except Exception:
+                        prev_txid_bytes = b""
+                    vin_id = hash_string_and_number(prev_txid_bytes, prev_vout)
+                    vin["utxo_id"] = vin_id
+                    vins.append(vin)
+
+                # Assemble normalized tx dict
+                tx["tx_id"]      = tx_bytes
+                tx["vout"]       = vouts
+                tx["vin"]        = vins
+                tx["zero_count"] = zero_count
+
+                normalized.append(tx)
+
+            # 4) Put normalized back on block
+            block["tx"] = normalized
+
+            # 5) Compute max_zero_count
+            block["max_zero_count"] = max(
+                (tx.get("zero_count", 0) for tx in normalized), default=0
+            )
+
+            # 6) Enqueue with retries
+            for _ in range(5):
+                if stopped_event.is_set():
+                    break
+                try:
+                    self.prefeteched_block.put(block, timeout=0.5)
                     break
                 except queue.Full:
-                    attempt_count += 1
                     if stopped_event.wait(timeout=0.2):
                         break
 
+            self.next_height += 1
+
     def stop(self):
-        """Stop all threads and resources"""
+        """
+        Stop all threads and clean up.
+        """
         print("Arrêt du fetcher en cours...")
-        
-        # Signal all threads to stop
         self.stopped_event.set()
-        
-        # Stop the fetcher
-        try:
-            print("Arrêt de l'indexer sous-jacent...")
-            self.fetcher.stop()
-        except Exception as e:
-            print(f"Erreur lors de l'arrêt de l'indexer: {e}")
-        
-        # Wait for executor threads to finish (with timeout)
+
         print(f"Attente de la fin des {len(self.executors)} threads...")
-        max_wait = 5  # Attendre au maximum 5 secondes
-        start_time = time.time()
-        
-        for i, thread in enumerate(self.executors):
-            remaining_time = max(0, max_wait - (time.time() - start_time))
-            if thread.is_alive():
-                thread.join(timeout=remaining_time)
-                if thread.is_alive():
-                    print(f"Le thread {i} ne s'est pas terminé proprement")
-        
-        # Vider la queue pour éviter tout blocage
+        start = time.time()
+        for i, t in enumerate(self.executors):
+            t.join(timeout=max(0, 5 - (time.time() - start)))
+            if t.is_alive():
+                print(f"Le thread {i} ne s'est pas terminé proprement")
+
+        # drain queue
         try:
             while True:
                 self.prefeteched_block.get_nowait()
         except queue.Empty:
             pass
-            
+
         print("Fetcher arrêté")
-
-
-class BitcoindRPCError(Exception):
-    pass
-
-
-def rpc_call(method, params):
-    try:
-        payload = {
-            "method": method,
-            "params": params,
-            "jsonrpc": "2.0",
-            "id": 0,
-        }
-        response = requests.post(
-            Config()["BACKEND_URL"],
-            data=json.dumps(payload),
-            headers={"content-type": "application/json"},
-            verify=(not Config()["BACKEND_SSL_NO_VERIFY"]),
-            timeout=Config()["REQUESTS_TIMEOUT"],
-        ).json()
-        if "error" in response and response["error"]:
-            raise BitcoindRPCError(f"Error calling {method}: {response['error']}")
-        return response["result"]
-    except (
-        requests.exceptions.RequestException,
-        json.decoder.JSONDecodeError,
-        KeyError,
-    ) as e:
-        raise BitcoindRPCError(f"Error calling {method}: {str(e)}") from e
-
-
-def deserialize_block(block_hex, block_index):
-    deserializer = indexer.Deserializer(
-        {
-            "rpc_address": "",
-            "rpc_user": "",
-            "rpc_password": "",
-            "network": Config().network_name,
-            "db_dir": "",
-            "log_file": "",
-            "prefix": b"prefix",
-        }
-    )
-    decoded_block = deserializer.parse_block(block_hex, block_index)
-    decoded_block["tx"] = decoded_block.pop("transactions")
-    return decoded_block
-
-
-def adapt_auxpow_block(block_json):
-    """
-    Adapt AuxPoW block JSON from bitd to the unified block structure expected by the parser.
-    This includes:
-    - Adding 'is_op_return' to each vout (True if output is OP_RETURN)
-    - Calculating and adding 'zero_count' to each transaction (number of leading zeros in txid)
-    - Adding 'max_zero_count' to the block (max zero_count in block)
-    - Renaming 'txid' to 'tx_id' and 'hash' to 'tx_hash' (and converting tx_id to bytes)
-    - Generating 'utxo_id' for each vin and vout (8 bytes: first 8 bytes of SHA256(txid_bytes + n_bytes))
-    """
-    block = {
-        "height": block_json["height"],
-        "block_hash": block_json["hash"],
-        "tx": block_json["tx"],
-        "auxpow": block_json["auxpow"],
-        "time": block_json.get("time"),
-        "previousblockhash": block_json.get("previousblockhash"),
-        "nextblockhash": block_json.get("nextblockhash"),
-    }
-
-    # Add 'is_op_return' to each vout
-    for tx in block["tx"]:
-        for vout in tx["vout"]:
-            script_hex = vout.get("scriptPubKey", {}).get("hex", "")
-            script_asm = vout.get("scriptPubKey", {}).get("asm", "")
-            vout["is_op_return"] = script_hex.startswith("6a") or script_asm.startswith("OP_RETURN")
-
-    # Calculate and add 'zero_count' to each tx, and 'max_zero_count' to block
-    def count_leading_zeros(hex_str):
-        count = 0
-        for c in hex_str:
-            if c == '0':
-                count += 1
-            else:
-                break
-        return count
-    max_zero_count = 0
-    for tx in block["tx"]:
-        txid = tx.get("txid") or tx.get("tx_id")
-        if txid is not None:
-            zero_count = count_leading_zeros(txid)
-            tx["zero_count"] = zero_count
-            if zero_count > max_zero_count:
-                max_zero_count = zero_count
-        else:
-            tx["zero_count"] = 0
-    block["max_zero_count"] = max_zero_count
-
-    # Rename 'txid' to 'tx_id' (as bytes) and 'hash' to 'tx_hash' for parser compatibility
-    for tx in block["tx"]:
-        if "txid" in tx:
-            be_hex = tx.pop("txid")
-            # Convert big‐endian hex → little‐endian bytes so inverse_hash() prints correctly
-            tx["tx_id"] = bytes.fromhex(be_hex)[::-1]
-        elif "tx_id" in tx and isinstance(tx["tx_id"], str):
-            be_hex = tx["tx_id"]
-            tx["tx_id"] = bytes.fromhex(be_hex)[::-1]
-        if "hash" in tx:
-            tx["tx_hash"] = tx.pop("hash")
-
-    # Generate 'utxo_id' for each vin and vout (8 bytes: first 8 bytes of SHA256(txid_bytes + n_bytes))
-    def make_utxo_id(txid_bytes, n):
-        n_bytes = n.to_bytes(4, "little")
-        h = hashlib.sha256(txid_bytes + n_bytes).digest()
-        return h[:8]
-    for tx in block["tx"]:
-        for vout in tx["vout"]:
-            vout["utxo_id"] = make_utxo_id(tx["tx_id"], vout["n"])
-        for vin in tx["vin"]:
-            if "coinbase" in vin:
-                vin["utxo_id"] = b"coinbase"
-            else:
-                prev_txid_bytes = bytes.fromhex(vin["txid"])
-                vin["utxo_id"] = make_utxo_id(prev_txid_bytes, vin["vout"])
-    return block
-
-
-def get_block_rpc(block_height):
-    """
-    Fetch a block by height, handling both normal and AuxPoW blocks.
-    Returns None if the requested height is out of range (end of chain).
-    """
-    try:
-        block_hash = rpc_call("getblockhash", [block_height])
-    except BitcoindRPCError as e:
-        if "Block height out of range" in str(e):
-            # End of chain reached, stop fetching
-            return None
-        else:
-            raise
-    if block_height >= 1074:
-        block_json = rpc_call("getblock", [block_hash, 2])
-        if "auxpow" in block_json:
-            return adapt_auxpow_block(block_json)
-        else:
-            raw_block = rpc_call("getblock", [block_hash, 0])
-            decoded_block = deserialize_block(raw_block, block_height)
-            return decoded_block
-    else:
-        raw_block = rpc_call("getblock", [block_hash, 0])
-        decoded_block = deserialize_block(raw_block, block_height)
-        return decoded_block
-
-
-class PurePythonFetcher:
-    def __init__(self, start_height=0):
-        self.current_height = start_height
-
-    def get_next_block(self, timeout=1.0):
-        """
-        Fetch the next block using get_block_rpc, handling AuxPoW and normal blocks.
-        """
-        block = get_block_rpc(self.current_height + 1)
-        if block is not None:
-            self.current_height += 1
-        return block
-
-# Example usage (replace RSFetcher with PurePythonFetcher for blocks >= 1074):
-#
-# if start_height < 1074:
-#     fetcher = RSFetcher(start_height)
-# else:
-#     print("[DEBUG] Switching to PurePythonFetcher for AuxPoW blocks")
-#     fetcher = PurePythonFetcher(start_height)
-#
-# Then use fetcher.get_next_block() in your main loop.
-#
-# You can implement logic in your main parse loop to switch fetchers at block 1074.

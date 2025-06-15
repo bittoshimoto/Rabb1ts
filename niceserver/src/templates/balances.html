@@ -44,7 +44,8 @@
                     </tr>
                     {% for balance in balance['utxos'] %}
                     <tr>
-                        <td>{{ display_utxo(balance["utxo"], True) | safe }}</td>
+                        {% set txid_only = balance["utxo"].split(':')[0] %}
+                        <td>{{ display_utxo(txid_only, True) | safe }}</td>
                         <td style="text-align: right;">{{ display_quantity(balance["balance"]) }}</td>
                     </tr>
                     {% endfor %}

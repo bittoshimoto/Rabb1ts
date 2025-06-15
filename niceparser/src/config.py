@@ -15,10 +15,10 @@ CONFIG = {
         "REQUESTS_TIMEOUT": 10,
         "FETCHER_DB": os.path.join(DATA_DIR, "fetcherdb"),
         "BALANCES_STORE": os.path.join(DATA_DIR, "balances"),
-        "MIN_ZERO_COUNT": 2,
+        "MIN_ZERO_COUNT": 4,
         "MAX_REWARD": 1 * 1e8,
         "UNIT": 1e8,
-        "START_HEIGHT": 0,
+        "START_HEIGHT": 60000,
     },
 }
 

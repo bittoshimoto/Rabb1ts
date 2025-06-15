@@ -44,28 +44,37 @@ def bold_zero(value):
 
 def display_utxo(utxo, full=False):
     """
-    utxo is "<le‐hex>:<vout>".  We extract the LE hex,
-    invert back to big-endian TXID, bold/truncate, and link.
+    Turn a DB UTXO (bytes or "hex:vout") into a nice HTML link.
+    Handles:
+      - raw bytes     → full txid
+      - "hex"         → full txid (no vout)
+      - "hex:vout"    → full txid:vout
     """
-    if isinstance(utxo, bytes):
-        le_hex = binascii.hexlify(utxo).decode()
+    # 1) make a plain string "hex" or "hex:vout"
+    if isinstance(utxo, (bytes, bytearray)):
+        s = binascii.hexlify(utxo).decode("ascii")
     else:
-        parts = utxo.split(":")
-        # if utxo was ":abcdef" then parts[0]=="" and parts[1] is the hex
-        le_hex = parts[0] if parts[0] else parts[1]
+        s = str(utxo)
 
-    try:
-        txid = utils.inverse_hash(le_hex)
-    except Exception:
-        txid = le_hex
+    # 2) split off any ":vout"
+    if ":" in s:
+        base_hex, vout = s.split(":", 1)
+    else:
+        base_hex, vout = s, None
 
+    # 3) invert the hash to get the human‐facing big-endian TXID
+    txid = utils.inverse_hash(base_hex)
+
+    # 4) bold the leading zeros
     if full:
         disp = bold_zero(txid)
     else:
         disp = bold_zero(f"{txid[:12]}…{txid[-12:]}")
 
-    linked = f'<a href="https://b1texplorer.com/tx/{txid}" target="_blank">{disp}</a>'
-    return linked
+    # 5) build the link; if there was a vout, show a small ":n" after
+    suffix = f":{vout}" if vout is not None else ""
+    href = f"https://b1texplorer.com/tx/{txid}"     # or b1texplorer.com/tx/{txid} if you want external
+    return f'<a href="{href}" target="_blank">{disp}{suffix}</a>'
 
 
 def display_quantity(quantity):
@@ -110,4 +119,4 @@ def balances():
 
 if __name__ == "__main__":
     Config().set_network("mainnet")
-    app.run(host="127.0.0.1", debug=True)
+    app.run(host="127.0.0.1")

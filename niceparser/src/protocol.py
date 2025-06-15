@@ -94,10 +94,8 @@ def process_block_unified(block, rb1ts_store):
     rb1ts_store.start_block(height, block["block_hash"])
 
     for tx in block["tx"]:
-        # exclude coinbase (robust for all block types)
-        if tx.get("coinbase", False):
-            continue
-        if "vin" in tx and isinstance(tx["vin"], list) and len(tx["vin"]) > 0 and "coinbase" in tx["vin"][0]:
+        # exclude coinbase
+        if "coinbase" in tx["vin"][0]:
             continue
 
         # exclude op_return
@@ -116,8 +114,7 @@ def process_block_unified(block, rb1ts_store):
 
         if reward > 0:
             nice_hash = utils.inverse_hash(binascii.hexlify(tx["tx_id"]).decode())
-            reward_rb1ts = reward / 1e8
-            print(f"{reward_rb1ts:.8f} RB1TS rewarded for {nice_hash} in block {height}")
+            print(f"{reward} RB1TS rewarded for {nice_hash}")
         
         # Start transaction only if there's something to distribute
         rb1ts_store.start_transaction(tx["tx_id"], reward)

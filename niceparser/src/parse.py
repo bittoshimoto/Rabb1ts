@@ -5,7 +5,7 @@ import signal
 from rb1tsstore import Rb1tsStore
 from config import Config
 from protocol import process_block_unified
-from fetcher import RSFetcher, PurePythonFetcher
+from fetcher import RSFetcher
 from shutdownmanager import ShutdownManager
 
 def parse():
@@ -16,11 +16,11 @@ def parse():
     shutdown_mgr = ShutdownManager(timeout_global=30)
     
     try:
-        # Initialize storage and indexing system
+        # Initialize the unified system for storage and indexing
         Config().set_network("mainnet")
         rb1ts_store = Rb1tsStore(base_path=Config()["BALANCES_STORE"])
 
-        # Get the last indexed block height
+        # Get the current height
         current_height = rb1ts_store.get_last_indexed_block()
 
         # If the system has already processed blocks, continue from there
@@ -31,14 +31,11 @@ def parse():
             current_height = Config()["START_HEIGHT"]
             print(f"Démarrage depuis le bloc configuré: {current_height}")
 
-        # Select fetcher based on current height (switch to PurePythonFetcher for AuxPoW blocks)
-        if current_height < 1073:
-            fetcher = RSFetcher(current_height)
-        else:
-            fetcher = PurePythonFetcher(current_height)
-
+        # Initialize the block fetcher
+        block_fetcher = RSFetcher(current_height + 1)
+        
         # Enregistrer les ressources à fermer avec la méthode correcte pour chaque ressource
-        shutdown_mgr.register_resource(fetcher, "Block Fetcher", close_method="stop", timeout=10, priority=1)
+        shutdown_mgr.register_resource(block_fetcher, "Block Fetcher", close_method="stop", timeout=10, priority=1)
         shutdown_mgr.register_resource(rb1ts_store, "Rb1tsStore", close_method="close", timeout=20, priority=2)
 
         # Variables for performance tracking
@@ -47,29 +44,17 @@ def parse():
         counter = 0
 
         try:
-            none_count = 0
             while not shutdown_mgr.is_shutdown_requested():
                 start_time = time.time()
-                block = fetcher.get_next_block(timeout=0.5)
+                
+                # Utiliser un timeout court pour réagir rapidement aux demandes d'arrêt
+                block = block_fetcher.get_next_block(timeout=0.5)
 
                 # If no block is available, check for shutdown and wait
                 if block is None:
-                    none_count += 1
-                    if none_count >= 3 and not isinstance(fetcher, PurePythonFetcher):
-                        fetcher = PurePythonFetcher(current_height)
-                        none_count = 0
-                        continue
                     if shutdown_mgr.is_shutdown_requested():
                         break
-                    time.sleep(0.2)
-                    continue
-                else:
-                    none_count = 0
-
-                # Switch to PurePythonFetcher at block 1074 if not already
-                if block.get("height") == 1074 and not isinstance(fetcher, PurePythonFetcher):
-                    print("[DEBUG] Switching to PurePythonFetcher for AuxPoW blocks >= 1074")
-                    fetcher = PurePythonFetcher(1073)
+                    time.sleep(0.2)  # Temps d'attente plus court pour mieux réagir
                     continue
 
                 # Check if we have missed blocks
@@ -106,7 +91,7 @@ def parse():
                     end="\r",
                 )
                 
-                # Periodically check if a shutdown is requested (every block)
+                # Vérifier périodiquement si un arrêt est demandé (chaque bloc)
                 if shutdown_mgr.is_shutdown_requested():
                     break
 
