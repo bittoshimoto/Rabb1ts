@@ -1,112 +1,113 @@
 #!/usr/bin/env python3
-import hashlib
-import hmac
-from mnemonic import Mnemonic
+import json, time
+import requests, base58, hashlib, hmac
 import ecdsa
-import base58
 
-# --- CONFIGURE YOUR COIN PARAMETERS HERE ---
-# BIP-44 coin type = 3141
-COIN_TYPE = 3141
-# P2PKH version byte for your coin (25 decimal → 0x19)
+# ─── CONFIG ─────────────────────────────────────────────────────────────────────
+RPC_URL      = "http://127.0.0.1:9876/"  # your B1T daemon RPC
+RPC_USER     = "rpc"
+RPC_PASSWORD = "rpc"
+DUST_LIMIT   = 550                        # sats
+FEE_RATE     = 1000                       # sats per kB (~0.01 B1T/kB)
+# P2PKH version for B1T (0x19) and WIF version (0x9E)
 ADDR_VERSION = 0x19
-# WIF secret-key version byte (158 decimal → 0x9E)
 WIF_VERSION  = 0x9E
+# ────────────────────────────────────────────────────────────────────────────────
 
-# BIP-44 path components (all hardened except the last two)
-PATH = [
-    44   | 0x80000000,   #  44'
-    COIN_TYPE | 0x80000000,   # 3141'
-    0    | 0x80000000,   #   0'
-    0,                   #   0
-    0,                   #   0
-]
+def rpc(method, params=None):
+    payload = {"jsonrpc":"1.0","id":"sender","method":method,"params":params or []}
+    r = requests.post(RPC_URL, auth=(RPC_USER,RPC_PASSWORD),
+                      headers={"Content-Type":"application/json"},
+                      data=json.dumps(payload))
+    r.raise_for_status()
+    res = r.json()
+    if res.get("error"):
+        raise RuntimeError(res["error"])
+    return res["result"]
 
+def wif_to_privkey(wif: str) -> bytes:
+    raw = base58.b58decode(wif)
+    # raw = [version (1)] + privkey (32) + [0x01 if compressed] + checksum(4)
+    if raw[0] != WIF_VERSION or len(raw) not in (38, 37):
+        raise ValueError("Invalid WIF or wrong network byte")
+    return raw[1:33]
 
-def mnemonic_to_seed(mnemonic: str, passphrase: str = "") -> bytes:
-    """Derive BIP-39 seed from the mnemonic."""
-    return hashlib.pbkdf2_hmac(
-        "sha512",
-        mnemonic.encode("utf-8"),
-        ("mnemonic" + passphrase).encode("utf-8"),
-        2048,
-        dklen=64,
-    )
-
-
-def derive_bip32_master_key(seed: bytes):
-    """BIP-32 master (privkey, chain code)."""
-    I = hmac.new(b"Bitcoin seed", seed, hashlib.sha512).digest()
-    return I[:32], I[32:]
-
-
-def derive_child(privkey: bytes, chain_code: bytes, index: int):
-    """Derive one child key at `index` (handles hardened automatically)."""
-    hardened = index & 0x80000000 != 0
-    if hardened:
-        data = b"\x00" + privkey + index.to_bytes(4, "big")
-    else:
-        sk = ecdsa.SigningKey.from_string(privkey, curve=ecdsa.SECP256k1)
-        vk = sk.get_verifying_key().to_string()
-        # compressed pubkey: 0x02/0x03 + X
-        prefix = b"\x03" if vk[32] & 1 else b"\x02"
-        data = prefix + vk[:32] + index.to_bytes(4, "big")
-
-    I = hmac.new(chain_code, data, hashlib.sha512).digest()
-    IL, IR = I[:32], I[32:]
-    # child_priv = (IL + parent_priv) mod n
-    n = ecdsa.SECP256k1.order
-    child_int = (int.from_bytes(IL, "big") + int.from_bytes(privkey, "big")) % n
-    return child_int.to_bytes(32, "big"), IR
-
-
-def privkey_to_wif(privkey: bytes) -> str:
-    """Encode a 32-byte privkey into WIF with your custom prefix."""
-    ext = bytes([WIF_VERSION]) + privkey + b"\x01"  # compressed flag
-    chk = hashlib.sha256(hashlib.sha256(ext).digest()).digest()[:4]
-    return base58.b58encode(ext + chk).decode()
-
-
-def pubkey_from_privkey(privkey: bytes) -> bytes:
-    """Get compressed pubkey bytes from privkey."""
+def privkey_to_pubkey(privkey: bytes) -> bytes:
     sk = ecdsa.SigningKey.from_string(privkey, curve=ecdsa.SECP256k1)
     vk = sk.get_verifying_key().to_string()
-    prefix = b"\x03" if vk[32] & 1 else b"\x02"
+    prefix = b"\x03" if (vk[32] & 1) else b"\x02"
     return prefix + vk[:32]
 
-
-def pubkey_to_p2pkh_address(pubkey: bytes) -> str:
-    """Compute P2PKH address with your coin’s version byte."""
+def pubkey_to_p2pkh(pubkey: bytes) -> str:
     h160 = hashlib.new("ripemd160", hashlib.sha256(pubkey).digest()).digest()
     ext  = bytes([ADDR_VERSION]) + h160
     chk  = hashlib.sha256(hashlib.sha256(ext).digest()).digest()[:4]
-    return base58.b58encode(ext + chk).decode()
+    return base58.b58encode(ext+chk).decode()
 
+def list_utxos(addr):
+    try: rpc("importaddress",[addr,"",False])
+    except: pass
+    return rpc("listunspent",[1,9999999,[addr]])
 
-if __name__ == "__main__":
-    # 1) generate mnemonic
-    mnemo   = Mnemonic("english")
-    mnemonic= mnemo.generate(128)
-    print("mnemonic:", mnemonic)
+def estimate_fee(n_in, n_out):
+    size = 180*n_in + 34*n_out + 10
+    return (FEE_RATE*size + 999)//1000
 
-    # 2) seed → master
-    seed        = mnemonic_to_seed(mnemonic)
-    master_priv, master_cc = derive_bip32_master_key(seed)
+def build_and_sign(private_wif, recipients, change_addr):
+    # 1) key & own address
+    priv = wif_to_privkey(private_wif)
+    pub  = privkey_to_pubkey(priv)
+    me   = pubkey_to_p2pkh(pub)
+    # 2) gather UTXOs
+    utxos = list_utxos(me)
+    if not utxos:
+        raise RuntimeError("No UTXOs to spend.")
+    total_in = 0
+    for u in utxos:
+        sats = int(u["amount"]*1e8)
+        total_in += sats
+    # 3) compute required
+    want = sum(r[1] for r in recipients)
+    # one extra change output
+    fee = estimate_fee(len(utxos), len(recipients)+1)
+    if total_in < want + fee + DUST_LIMIT:
+        raise RuntimeError(f"Need ≥{want+fee+DUST_LIMIT} sats, have {total_in}")
+    change = total_in - want - fee
+    # 4) make outputs map
+    outs = { addr: sats/1e8 for addr,sats in recipients }
+    outs[change_addr] = change/1e8
+    # 5) RPC calls
+    inputs = [ {"txid":u["txid"],"vout":u["vout"]} for u in utxos ]
+    raw = rpc("createrawtransaction",[inputs, outs])
+    signed = rpc("signrawtransaction",[raw, [], [private_wif]])
+    if not signed.get("complete"):
+        raise RuntimeError("Signing failed")
+    return signed["hex"]
 
-    # 3) walk down the path
-    priv, cc = master_priv, master_cc
-    for idx in PATH:
-        priv, cc = derive_child(priv, cc, idx)
+def main():
+    print("\n== RB1TS Sender ==")
+    wif = input("Enter your PRIVATE WIF (not stored): ").strip()
+    total_rb = int(float(input("Total RB1TS to send: ").strip())*1e8)
+    n = int(input("How many recipients? ").strip())
+    recs = []
+    sofar = 0
+    for i in range(n):
+        a = input(f" Recipient #{i+1} address: ").strip()
+        sats = int(float(input(f"  → RB1TS sats to send to #{i+1}: ").strip())*1e8)
+        recs.append((a, sats))
+        sofar += sats
+    if sofar != total_rb:
+        raise RuntimeError(f"Sum of splits {sofar} ≠ total {total_rb}")
+    change = input("Change address: ").strip()
 
-    # 4) WIF & address
-    wif     = privkey_to_wif(priv)
-    pubkey  = pubkey_from_privkey(priv)
-    address = pubkey_to_p2pkh_address(pubkey)
+    print("\nBuilding transaction…")
+    txhex = build_and_sign(wif, recs, change)
+    print("Raw TX hex:", txhex)
+    if input("Broadcast? [y/N] ").lower().startswith("y"):
+        txid = rpc("sendrawtransaction",[txhex])
+        print("✅ TX broadcast:", txid)
+    else:
+        print("OK, not broadcast.")
 
-    print("derivation_path: " + 
-          "m/" + "/".join(
-             (str(idx & 0x7FFFFFFF) + ("'" if idx & 0x80000000 else ""))
-             for idx in PATH
-          ))
-    print("address:", address)
-    print("private WIF:", wif)
+if __name__=="__main__":
+    main()
