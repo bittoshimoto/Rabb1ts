@@ -7,7 +7,7 @@ import requests
 RPC_URL      = "http://127.0.0.1:9876"
 RPC_USER     = "rpc"
 RPC_PASSWORD = "rpc"
-FEE_RATE     = 100_000_000   # sats per kB = 0.001 B1T/kB
+FEE_RATE     = 1_000_000   # sats per kB = 0.01 B1T/kB
 # ────────────────────────────────────────────────────────────────────────────────
 
 def rpc(method, params=None):
