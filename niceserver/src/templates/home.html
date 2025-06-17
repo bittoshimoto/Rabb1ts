@@ -51,7 +51,7 @@
                             <li>Last Parsed Block: {{ stats["last_parsed_block"] }}</li>
                             <li>RABB1TS Supply: {{ '{:,}'.format(stats["supply"] / 10**8) }}</li>
                             <li>RABB1TS Hashes Count: {{ '{:,}'.format(stats["nice_hashes_count"])  }}</li>
-                            <li>Rabb1test Hash: {{ display_utxo(stats["nicest_hash"]) | safe }}</li>
+                            <li>Rabb1t Best Hash: {{ display_utxo(stats["nicest_hash"]) | safe }}</li>
                             <li>Last  Hash: {{ display_utxo(stats["last_nice_hash"]) | safe }}</li>
                             <li>First RABB1TS Hash: {{ display_utxo(stats["first_nice_hash"]) | safe }}</li>
                             <li>UTXOs Count: {{ '{:,}'.format(stats["utxos_count"])  }}</li>

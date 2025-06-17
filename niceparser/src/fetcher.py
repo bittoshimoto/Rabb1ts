@@ -35,7 +35,6 @@ def rpc_call(method, params):
         cfg["BACKEND_URL"],
         data=json.dumps(payload),
         headers={"content-type": "application/json"},
-        auth=("rpc", "rpc"),
         timeout=cfg["REQUESTS_TIMEOUT"],
         verify=not cfg["BACKEND_SSL_NO_VERIFY"],
     )
