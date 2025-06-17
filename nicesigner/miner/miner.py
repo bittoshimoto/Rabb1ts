@@ -48,7 +48,7 @@ TX_SIZE_EST       = 148 + 34 + 10
 FEE               = int(math.ceil(RATE_SAT_PER_BYTE * TX_SIZE_EST))
 DUST              = 550
 
-print(f"Fee={FEE} sats ({MIN_FEE_PER_KB} B1T/kB × {TX_SIZE_EST} B)")
+print(f"Fee={FEE} tos ({MIN_FEE_PER_KB} B1T/kB × {TX_SIZE_EST} B)")
 print(f"→ Using {CORES} processes, target={TARGET} leading zeros\n")
 
 setup("mainnet")
