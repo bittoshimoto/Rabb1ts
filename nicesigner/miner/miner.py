@@ -74,6 +74,11 @@ def fetch_utxo():
         if sats <= DUST + FEE:
             continue
         info = rpc("gettxout", [u["txid"], u["vout"], True])
+        # if the UTXO isn't yet in our node's view (unconfirmed/spent), retry
+        if info is None:
+            print(f"[fetch_utxo] UTXO {u['txid']}:{u['vout']} not yet confirmed; retrying in 60s…")
+            time.sleep(60)
+            return fetch_utxo()
         script_hex = info["scriptPubKey"]["hex"]
         candidates.append((u["txid"], u["vout"], sats, script_hex))
     if not candidates:
@@ -101,7 +106,7 @@ def miner_thread(idx, txid, vout, sats, script_hex):
         if signed.get('complete'):
             hex_signed = signed['hex']
             tid = Transaction.from_raw(hex_signed).get_txid()
-            if tid.startswith(prefix) and tid[len(prefix)] != '0':
+            if tid.startswith(prefix):
                 # stash both hex+sequence in a small file
                 with open("FOUND.json","w") as f:
                     json.dump({"hex":hex_signed,"seq":sequence}, f)
