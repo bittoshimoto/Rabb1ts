@@ -5,7 +5,7 @@ from flask import Flask, render_template, url_for, request
 from flask_httpauth import HTTPBasicAuth
 from werkzeug.security import generate_password_hash, check_password_hash
 
-
+from sender import list_utxos, send_rb1ts, broadcast_tx
 from config import Config
 from queries import Rb1tsQueries
 from nicefetcher import utils
@@ -43,38 +43,20 @@ def bold_zero(value):
 
 
 def display_utxo(utxo, full=False):
-    """
-    Turn a DB UTXO (bytes or "hex:vout") into a nice HTML link.
-    Handles:
-      - raw bytes     → full txid
-      - "hex"         → full txid (no vout)
-      - "hex:vout"    → full txid:vout
-    """
-    # 1) make a plain string "hex" or "hex:vout"
-    if isinstance(utxo, (bytes, bytearray)):
-        s = binascii.hexlify(utxo).decode("ascii")
+    if isinstance(utxo, bytes):
+        hexstr = binascii.hexlify(utxo).decode("utf-8")
     else:
-        s = str(utxo)
+        hexstr = str(utxo)
 
-    # 2) split off any ":vout"
-    if ":" in s:
-        base_hex, vout = s.split(":", 1)
-    else:
-        base_hex, vout = s, None
-
-    # 3) invert the hash to get the human‐facing big-endian TXID
-    txid = utils.inverse_hash(base_hex)
-
-    # 4) bold the leading zeros
+    txid = utils.inverse_hash(hexstr)
     if full:
         disp = bold_zero(txid)
     else:
         disp = bold_zero(f"{txid[:12]}…{txid[-12:]}")
 
-    # 5) build the link; if there was a vout, show a small ":n" after
-    suffix = f":{vout}" if vout is not None else ""
-    href = f"https://b1texplorer.com/tx/{txid}"     # or b1texplorer.com/tx/{txid} if you want external
-    return f'<a href="{href}" target="_blank">{disp}{suffix}</a>'
+    # <-- use an f-string here! -->
+    return f'<a href="https://blockbook.b1tcore.org/tx/{txid}" target="_blank">{disp}</a>'
+    return linked
 
 
 def display_quantity(quantity):
@@ -116,6 +98,77 @@ def balances():
         address=address,
     )
 
+@app.route('/send', methods=['GET', 'POST'])
+def send():
+    # …
+    if request.method == 'GET' or ('confirm' not in request.form and 'broadcast' not in request.form):
+        address = request.values.get('address', '')
+        wif     = request.values.get('wif', '')
+        # Grab as strings for the GET form, but override on POST preview
+        total_rb = request.values.get('total_rb', '')
+        send_rb  = request.values.get('send_rb', '')
+        utxos = []
+        txhex = None
+
+        if address:
+            utxos = list_utxos(address)
+
+        # POST preview
+        if request.method == 'POST' and address and wif and request.form.get('total_rb'):
+            total_rb = float(request.form['total_rb'])
+            send_rb  = float(request.form['send_rb'])
+            utxo_index = int(request.form['utxo_index'])
+            recv_addr  = request.form['recv_addr']
+            rest_addr  = request.form['rest_addr']
+            change_addr= request.form['change_addr']
+            txhex, metadata = send_rb1ts(
+                wif, address, total_rb, send_rb,
+                utxo_index, recv_addr, rest_addr, change_addr
+            )
+
+        return render_template(
+            'send.html',
+            utxos=utxos,
+            address=address,
+            wif=wif,
+            total_rb=total_rb,     # ← include both here
+            send_rb=send_rb,       # ← so Jinja can compare them
+            txhex=txhex,
+            broadcast=False,
+            css_url=url_for('static', filename='home.css'),
+            display_quantity=display_quantity
+        )
+
+    # POST with confirm: perform broadcast or cancellation
+    else:
+        confirm = request.form.get('confirm')
+        txhex = request.form.get('txhex')
+        if confirm == 'yes':
+            try:
+                txid = broadcast_tx(txhex)
+                success = True
+                error = None
+            except Exception as e:
+                txid = None
+                success = False
+                error = str(e)
+        else:
+            txid = None
+            success = False
+            error = 'User cancelled'
+
+        return render_template(
+            'send.html',
+            utxos=None,
+            address=None,
+            wif=None,
+            txhex=None,
+            broadcast=True,
+            success=success,
+            txid=txid,
+            error=error,
+            css_url=url_for('static', filename='home.css')
+        )
 
 if __name__ == "__main__":
     Config().set_network("mainnet")

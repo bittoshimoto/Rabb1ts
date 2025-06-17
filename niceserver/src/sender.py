@@ -2,7 +2,7 @@
 import json
 import requests
 import base58
-
+import requests
 # ─── CONFIG ─────────────────────────────────────────────────────────────────────
 RPC_URL      = "http://127.0.0.1:9876"
 RPC_USER     = "rpc"
@@ -23,23 +23,24 @@ def rpc(method, params=None):
 
 
 def list_utxos(addr: str):
-    r = requests.get(f"https://b1texplorer.com/ext/getaddresstxs/{addr}/0/200", timeout=10)
+    """
+    Query blockbook.b1tcore.org for both confirmed and unconfirmed UTXOs.
+    Returns a list of dicts: {txid, vout, sats}.
+    """
+    # confirmed=false means “include mempool UTXOs too”
+    url = f"https://blockbook.b1tcore.org/api/v2/utxo/{addr}?confirmed=false"
+    r = requests.get(url, timeout=10)
     r.raise_for_status()
+    data = r.json()  # a list of UTXO objects
     utxos = []
-    for e in r.json():
-        txid = e.get("txid")
-        if not txid:
-            continue
-        raw = requests.get(
-            f"https://b1texplorer.com/api/getrawtransaction?txid={txid}&decrypt=1",
-            timeout=10
-        )
-        raw.raise_for_status()
-        decoded = raw.json()
-        for v in decoded.get("vout", []):
-            if addr in v.get("scriptPubKey", {}).get("addresses", []):
-                sats = int(v.get("value", 0) * 1e8)
-                utxos.append({"txid": txid, "vout": v["n"], "sats": sats})
+    for u in data:
+        # value is a string of satoshis per Blockbook spec
+        sats = int(u["value"])
+        utxos.append({
+            "txid": u["txid"],
+            "vout": u["vout"],
+            "sats": sats
+        })
     return utxos
 
 
@@ -56,7 +57,97 @@ def build_tx(wif, inputs, outputs):
     return signed["hex"]
 
 
-def main():
+def send_rb1ts(
+    wif: str,
+    addr: str,
+    total_rb: float,
+    send_rb: float,
+    utxo_index: int,
+    recv_addr: str,
+    rest_addr: str,
+    change_addr: str
+):
+    """
+    Build and sign a RB1TS transaction using the same logic as the CLI.
+    Returns (txhex, metadata).
+    """
+    utxos = list_utxos(addr)
+    if not utxos:
+        raise ValueError("❌ no UTXOs to spend")
+
+    base = utxos[utxo_index]
+
+    info = rpc("getnetworkinfo")
+    soft_limit = info.get("softdustlimit", info.get("harddustlimit"))
+    DUST_LIMIT = int(soft_limit * 1e8)
+
+    send_sats = DUST_LIMIT
+    total_required = int((total_rb / send_rb) * send_sats)
+
+    # Detect full-balance send
+    full_send = (total_rb == send_rb)
+    outputs_count = 2 if full_send else 3
+
+    # Coin selection
+    selected = [base]
+    acc = base["sats"]
+    fee = estimate_fee(len(selected), outputs_count)
+    needed = total_required + fee
+    others = [u for u in utxos if u != base]
+    others.sort(key=lambda x: x["sats"], reverse=True)
+    for u in others:
+        if acc >= needed:
+            break
+        selected.append(u)
+        acc += u["sats"]
+        fee = estimate_fee(len(selected), outputs_count)
+        needed = total_required + fee
+
+    if acc < needed:
+        raise ValueError(f"❌ insufficient funds: need {needed} sats but have {acc}")
+    total_inputs = acc
+
+    # Outputs mapping
+    recv_sats = send_sats
+    rest_sats = total_required - recv_sats
+    change_sats = total_inputs - total_required - fee
+
+    inputs = [{"txid": u["txid"], "vout": u["vout"]} for u in selected]
+
+    if full_send:
+        # only receiver + change
+        outputs = {
+            recv_addr:   recv_sats   / 1e8,
+            change_addr: change_sats / 1e8,
+        }
+    else:
+        # receiver + rest + change
+        outputs = {
+            recv_addr:   recv_sats    / 1e8,
+            rest_addr:   rest_sats    / 1e8,
+            change_addr: change_sats  / 1e8,
+        }
+
+    txhex = build_tx(wif, inputs, outputs)
+    metadata = {
+        "selected_utxos": selected,
+        "fee": fee,
+        "total_required": total_required,
+        "total_inputs": total_inputs,
+        "recv_sats": recv_sats,
+        "rest_sats": rest_sats,
+        "change_sats": change_sats,
+        "outputs_count": outputs_count,
+    }
+    return txhex, metadata
+
+
+def broadcast_tx(txhex: str) -> str:
+    """Broadcast raw TX hex and return TXID."""
+    return rpc("sendrawtransaction", [txhex])
+
+
+def interactive_main():
     print("\n== RB1TS Sender (3 outputs with base-UTXO selection) ==")
     wif  = input("Your PRIVATE WIF (not stored): ").strip()
     addr = input("Your B1T address (holds sats): ").strip()
@@ -144,4 +235,4 @@ def main():
         print("🛑 Not broadcast.")
 
 if __name__ == "__main__":
-    main()
+    interactive_main()

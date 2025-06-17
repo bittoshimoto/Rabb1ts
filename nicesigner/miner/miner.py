@@ -1,188 +1,150 @@
 #!/usr/bin/env python3
-import json, time, math
-import requests, base58
+import os
+import json
+import time
+import math
+import requests
 from bitcoinutils.transactions import Transaction
-from bitcoinutils.setup        import setup
+from bitcoinutils.setup import setup
 
-#
-# ─── CONFIG ────────────────────────────────────────────────────────────────────
-#
+from multiprocessing import Process, Event, Value, cpu_count
+from ctypes import c_ulonglong
 
-RPC_URL      = "http://127.0.0.1:9876/"
-RPC_USER     = "rpc"
-RPC_PASSWORD = "rpc"
+CONFIG_FILE = "config.json"
 
-ADDRESS      = ""
-PRIVATE_WIF  = ""
+def load_or_create_config():
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "r") as f:
+            return json.load(f)
+    # else: prompt and save
+    cfg = {
+        "ADDRESS":      input("Address: ").strip(),
+        "PRIVATE_WIF":  input("Private WIF: ").strip(),
+        "RPC_URL":      input("RPC URL (e.g. http://127.0.0.1:9876/): ").strip(),
+        "RPC_USER":     input("RPC User: ").strip(),
+        "RPC_PASSWORD": input("RPC Password: ").strip(),
+        "TARGET":       int(input("Target leading zeros: ") or "5"),
+        "CORES":        min(int(input("Cores to use: ") or str(cpu_count())), cpu_count())
+    }
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(cfg, f, indent=2)
+    print(f"\nSaved configuration to {CONFIG_FILE}\n")
+    return cfg
 
-
-TARGET        = 4      # leading zeroes required
-TOTAL_THREADS = 6     # locktime tweaks per round
-DUST          = 550    # sats minimum output
+# ─── CONFIG LOAD ───────────────────────────────────────────────────────────────
+cfg = load_or_create_config()
+ADDRESS      = cfg["ADDRESS"]
+PRIVATE_WIF  = cfg["PRIVATE_WIF"]
+RPC_URL      = cfg["RPC_URL"]
+RPC_USER     = cfg["RPC_USER"]
+RPC_PASSWORD = cfg["RPC_PASSWORD"]
+TARGET       = cfg["TARGET"]
+CORES        = cfg["CORES"]
 
 # Fee rate: 0.01 B1T per kB → sats/byte
-MIN_FEE_PER_KB     = 0.01
-RATE_SAT_PER_BYTE  = (MIN_FEE_PER_KB * 1e8) / 1000  # =1000 sats/byte
+MIN_FEE_PER_KB    = 0.01
+RATE_SAT_PER_BYTE = (MIN_FEE_PER_KB * 1e8) / 1000  # ≈1000 sats/byte
+TX_SIZE_EST       = 148 + 34 + 10
+FEE               = int(math.ceil(RATE_SAT_PER_BYTE * TX_SIZE_EST))
+DUST              = 550
 
-# Estimate TX size: 148B input + 34B output + 10B overhead
-TX_SIZE_EST        = 148 + 34 + 10  # ≈192 bytes
-
-# Compute base fee (rounded up)
-FEE = int(math.ceil(RATE_SAT_PER_BYTE * TX_SIZE_EST))
-print(f"Using fee={FEE} sats ({MIN_FEE_PER_KB} B1T/kB × {TX_SIZE_EST} B)")
-
-#
-# ─── END CONFIG ────────────────────────────────────────────────────────────────────
-#
+print(f"Fee={FEE} sats ({MIN_FEE_PER_KB} B1T/kB × {TX_SIZE_EST} B)")
+print(f"→ Using {CORES} processes, target={TARGET} leading zeros\n")
 
 setup("mainnet")
 
+BLOCKBOOK_API = "https://blockbook.b1tcore.org/api/v2/utxo/"
 
 def rpc(method, params=None):
     payload = {"jsonrpc":"1.0","id":"miner","method":method,"params":params or []}
-    r = requests.post(RPC_URL, auth=(RPC_USER,RPC_PASSWORD),
-                      headers={"Content-Type":"application/json"},
-                      data=json.dumps(payload))
-    try:
-        r.raise_for_status()
-    except requests.exceptions.HTTPError as e:
-        raise RuntimeError(f"RPC HTTP {e.response.status_code}: {e.response.text}")
+    r = requests.post(RPC_URL, auth=(RPC_USER, RPC_PASSWORD), json=payload)
+    r.raise_for_status()
     resp = r.json()
-    if resp.get("error"):
-        raise RuntimeError(f"RPC error: {resp['error']}")
-    return resp["result"]
+    if resp.get('error'):
+        raise RuntimeError(resp['error'])
+    return resp['result']
 
-
-def fetch_utxo_rpc():
-    """
-    Import our address as watch-only and listunspent via RPC.
-    Returns the largest UTXO > dust+fee as (txid, vout, sats, scriptPubKeyHex).
-    """
-    # watch-only import (idempotent)
-    try:
-        rpc("importaddress", [ADDRESS, "", False])
-    except RuntimeError:
-        pass
-
-    utxos = rpc("listunspent", [0, 9999999, [ADDRESS]])
+def fetch_utxo():
+    resp = requests.get(f"{BLOCKBOOK_API}{ADDRESS}?confirmed=true")
+    resp.raise_for_status()
+    utxos = resp.json()
     candidates = []
     for u in utxos:
-        sats = int(u["amount"] * 1e8)
-        if sats > DUST + FEE:
-            candidates.append((
-                u["txid"], 
-                u["vout"], 
-                sats, 
-                u["scriptPubKey"]
-            ))
-
+        sats = int(u["value"])
+        if sats <= DUST + FEE:
+            continue
+        info = rpc("gettxout", [u["txid"], u["vout"], True])
+        script_hex = info["scriptPubKey"]["hex"]
+        candidates.append((u["txid"], u["vout"], sats, script_hex))
     if not candidates:
         raise RuntimeError(f"No UTXOs > {DUST+FEE} sats; fund {ADDRESS} and retry.")
-
-    # return the largest
     return max(candidates, key=lambda x: x[2])
 
+# shared between processes:
+found_event    = Event()
+total_attempts = Value(c_ulonglong, 0)
+found_result   = Value('b', False)
 
-def build_and_find(txid, vout, sats, script_hex):
-    round_idx = 0
-    while True:
-        for tweak in range(TOTAL_THREADS):
-            locktime = round_idx * TOTAL_THREADS + tweak
+def miner_thread(idx, txid, vout, sats, script_hex):
+    sequence = idx
+    prefix   = '0' * TARGET
+    while not found_event.is_set():
+        raw = rpc("createrawtransaction", [[{"txid":txid,"vout":vout,"sequence":sequence}],
+                                           {ADDRESS:(sats-FEE)/1e8}, 0])
+        signed = rpc("signrawtransaction", [raw, [{"txid":txid,"vout":vout,
+                                                   "scriptPubKey":script_hex,
+                                                   "amount":sats/1e8}],
+                                              [PRIVATE_WIF]])
+        with total_attempts.get_lock():
+            total_attempts.value += 1
 
-            # create
-            raw = rpc("createrawtransaction", [
-                [{"txid":txid,"vout":vout,"sequence":0}],
-                {ADDRESS: (sats - FEE)/1e8},
-                locktime
-            ])
-            # sign
-            signed = rpc("signrawtransaction", [
-                raw,
-                [{"txid":txid,"vout":vout,"scriptPubKey":script_hex,"amount":sats/1e8}],
-                [PRIVATE_WIF]
-            ])
-            if not signed.get("complete"):
-                continue
-
-            hex_signed = signed["hex"]
+        if signed.get('complete'):
+            hex_signed = signed['hex']
             tid = Transaction.from_raw(hex_signed).get_txid()
-            if tid.startswith("0"*TARGET):
-                return hex_signed, locktime
+            if tid.startswith(prefix) and tid[len(prefix)] != '0':
+                # stash both hex+sequence in a small file
+                with open("FOUND.json","w") as f:
+                    json.dump({"hex":hex_signed,"seq":sequence}, f)
+                found_result.value = True
+                found_event.set()
+                return
 
-        round_idx += 1
+        sequence += CORES
 
+def main():
+    txid, vout, sats, script_hex = fetch_utxo()
+    print(f"Mining from UTXO: {txid} vout={vout} sats={sats}\n")
 
-def send_with_bump(hex_signed, txid, vout, sats, script_hex, locktime):
-    """
-    Try sendrawtransaction; on "insufficient priority", bump fee 50% and retry.
-    """
-    global FEE
+    procs = []
+    for i in range(CORES):
+        p = Process(target=miner_thread,
+                    args=(i, txid, vout, sats, script_hex),
+                    daemon=True)
+        p.start()
+        procs.append(p)
+
+    last = 0
     try:
-        return rpc("sendrawtransaction", [hex_signed])
-    except RuntimeError as e:
-        err = str(e)
-        if "insufficient priority" in err:
-            old = FEE
-            FEE = int(math.ceil(FEE * 1.5))
-            print(f"↗️  Priority too low; bumping fee {old}->{FEE} sats and retrying…")
-            # rebuild & re-sign
-            raw2 = rpc("createrawtransaction", [
-                [{"txid":txid,"vout":vout,"sequence":0}],
-                {ADDRESS: (sats - FEE)/1e8},
-                locktime
-            ])
-            signed2 = rpc("signrawtransaction", [
-                raw2,
-                [{"txid":txid,"vout":vout,"scriptPubKey":script_hex,"amount":sats/1e8}],
-                [PRIVATE_WIF]
-            ])
-            if not signed2.get("complete"):
-                raise RuntimeError("Re-sign after fee bump failed")
-            return rpc("sendrawtransaction", [signed2["hex"]])
-        raise
+        while not found_event.is_set():
+            time.sleep(1)
+            now = total_attempts.value
+            rate = now - last
+            last = now
+            print(f"Hashrate: {rate:,} txid/s, total attempts: {now:,}", end="\r")
+    except KeyboardInterrupt:
+        print("\nAborted by user")
+        found_event.set()
 
+    for p in procs:
+        p.join()
 
-def backup(batch, txid, locktime, sats, raw):
-    fn = f"{batch}-{txid}.json"
-    with open(fn,"w") as f:
-        json.dump({
-            "txid": txid,
-            "locktime": locktime,
-            "value": sats,
-            "raw": raw
-        }, f, indent=2)
-    print(f"[backup] {fn}")
+    if found_result.value:
+        result = json.load(open("FOUND.json"))
+        print(f"\n✅ Found nice TX (sequence={result['seq']})")
+        sent = rpc("sendrawtransaction", [result["hex"]])
+        print(f"🎉 Broadcast TX {sent}")
+    else:
+        print("\nNo result.")
 
-
-def mine_one(batch_name="mybatch"):
-    # 1) pick the freshest UTXO from RPC
-    txid, vout, sats, script_hex = fetch_utxo_rpc()
-    print("Mining single tx from UTXO:", txid, vout, sats, "sats")
-
-    # 2) hunt for a matching locktime
-    hex_signed, locktime = build_and_find(txid, vout, sats, script_hex)
-    print(f"✅ Found nice TX (locktime={locktime})")
-
-    # 3) broadcast, retry on priority, accept already-spent
-    while True:
-        try:
-            sent = send_with_bump(hex_signed, txid, vout, sats, script_hex, locktime)
-            break
-        except Exception as e:
-            msg = str(e)
-            if "bad-txns-inputs-spent" in msg:
-                sent = Transaction.from_raw(hex_signed).get_txid()
-                print(f"⚠️ Inputs already spent; assuming TX {sent} is live.")
-                break
-            print(f"⚠️ Broadcast error: {e}\n→ retrying in 2 minutes…")
-            time.sleep(120)
-
-    # 4) done
-    assert sent == Transaction.from_raw(hex_signed).get_txid()
-    backup(batch_name, sent, locktime, sats - FEE, hex_signed)
-    print(f"🎉 Broadcast TX {sent}; exiting.")
-
-
-if __name__ == "__main__":
-    import sys
-    mine_one(sys.argv[1] if len(sys.argv)>1 else "mybatch")
+if __name__ == '__main__':
+    main()

@@ -148,74 +148,52 @@ class Rb1tsQueries:
     
     def get_balance_by_address(self, address):
         """
-        Fetch UTXOs for an address using B1T Explorer’s getrawtransaction API,
-        convert them to utxo_id, and sum up their RB1TS balances.
+        Fetch UTXOs for an address using mempool.space API,
+        convert them to utxo_id, and sum up their balances.
 
         Args:
-            address (str): B1T address
+            address (str): Bitcoin address
 
         Returns:
             dict: Balance information including total balance and UTXOs
         """
+        # Get UTXOs from mempool.space API
+        try:
+            api_url = f"https://blockbook.b1tcore.org/api/v2/utxo/{address}?confirmed=false"
+            response = requests.get(api_url, timeout=10)
+            response.raise_for_status()
+            utxos = response.json()
+        except requests.RequestException as e:
+            print(f"Error fetching UTXOs for address {address}: {e}")
+            return {"total_balance": 0, "utxos": []}
+
+        print("utxos", utxos)
+
         total_balance = 0
         utxo_details = []
 
-        # 1) First, fetch the list of txids involving this address
-        try:
-            list_url = f"https://b1texplorer.com/ext/getaddresstxs/{address}/0/100"
-            resp = requests.get(list_url, timeout=10)
-            resp.raise_for_status()
-            txs = resp.json()
-        except Exception as e:
-            print(f"[ERROR] fetching tx list for {address}: {e}")
-            return {"address": address, "total_balance": 0, "utxos": []}
+        for utxo in utxos:
+            txid = utxo.get("txid")
+            vout = utxo.get("vout")
 
-        for entry in txs:
-            txid = entry.get("txid")
-            if not txid:
-                continue
+            if txid and vout is not None:
+                # Convert to utxo_id
+                utxo_id = utxo_to_utxo_id(txid, vout)
+                print("utxo_id", utxo_id)
+                shard_id = get_shard_id(utxo_id)
 
-            # 2) Fetch the full raw transaction with decrypt=1
-            try:
-                raw_url = (
-                    f"https://b1texplorer.com/api/getrawtransaction"
-                    f"?txid={txid}&decrypt=1"
-                )
-                r2 = requests.get(raw_url, timeout=10)
-                r2.raise_for_status()
-                tx = r2.json()
-            except Exception as e:
-                print(f"[WARN] could not fetch raw tx {txid}: {e}")
-                continue
-
-            # 3) Scan its vouts for any outputs to our address
-            for v in tx.get("vout", []):
-                # match by scriptPubKey.addresses
-                addrs = v.get("scriptPubKey", {}).get("addresses", [])
-                if address not in addrs:
-                    continue
-
-                n = v.get("n")
-                value = v.get("value", 0)
-                # convert to satoshis
-                sats = int(value * 1e8)
-
-                # 4) map that (txid,n) → utxo_id
-                utxo_id = utxo_to_utxo_id(txid, n)
-                shard = get_shard_id(utxo_id)
-
-                # 5) lookup in local shard DB
-                with self.shard_pools.shard_connection(shard) as db:
-                    row = db.cursor().execute(
-                        "SELECT balance FROM balances WHERE utxo_id = ?",
-                        (utxo_id,),
+                # Query the balance from the appropriate shard
+                with self.shard_pools.shard_connection(shard_id) as db:
+                    cursor = db.cursor()
+                    row = cursor.execute(
+                        "SELECT balance FROM balances WHERE utxo_id = ?", (utxo_id,)
                     ).fetchone()
 
-                bal = row["balance"] if row else 0
-                if bal > 0:
-                    total_balance += bal
-                    human = f"{utils.inverse_hash(txid)}:{n}"
-                    utxo_details.append({"utxo": human, "balance": bal})
+                    balance = 0
+                    if row:
+                        balance = row["balance"]
+                        total_balance += balance
+                        utxo_details.append({"utxo": f"{utils.inverse_hash(txid)}:{vout}", "balance": balance})
 
         return {
             "address": address,

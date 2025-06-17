@@ -19,10 +19,15 @@
         <div class="container section">
             <h1><a href="/">RABB1TS</a></h1>
             <p><b>Make your B1T transactions te be a carrot and earn RB1TS.</b></p>
-            <p>If your transaction txid starts with 4 or more zeros you earn RB1TS. The more zeros the more you earn!</p>
+      <nav class="page__nav">
+        <a href="{{ url_for('home') }}">Home</a> |
+        <a href="{{ url_for('balances') }}">Balances</a> |
+        <a href="{{ url_for('send') }}">Send</a> |
+        <a href="{{ url_for('protocol') }}">Protocol</a> 
+      </nav>
+            <p>If your transaction txid starts with 5 or more zeros you earn RB1TS.</p>
             <p>Don't be cheesy, mine transactions not blocks!</p>
         </div>
-        <div class="ribbon-wrapper-yellow"><div class="ribbon-yellow">WIP</div></div>
     </header>
 
     <main class="page__content">
@@ -30,24 +35,25 @@
             <table>
                 <tr style="border: 0;">
                     <td style="width: 50%;padding: 0">
-                        <h2 class="subtitle1">RB1TS links</h2>
+                        <h2 class="subtitle1">RABB1TS links</h2>
                         <ul style="margin-top: 15px;padding-right: 15px;">
-                            <li>Check your B1T address's <a href="balances">RB1TS balance</a>.</li>
-                            <li>Read the <a href="protocol">RB1TS Protocol</a> to learn more about My Hash Is RB1TS project.</li>
+                            <li>Check your B1T address's <a href="balances">RABB1TS balance</a>.</li>
+                            <li>Send RABB1TS: <a href="send">Send</a>.</li>
+                            <li>Read the <a href="protocol">RABB1TS Protocol</a> to learn more about RABB1TS project.</li>
                             <li>Download the <a href="https://github.com/bittoshimoto/Rabb1ts/">Nicesigner</a> written in Python to start mining your transactions.</li>
                             <li>Follow us on Twitter/X: <a href="https://x.com/bittoshimo">https://x.com/bittoshimo</a>.</li>
                             <li>Make a donation to support the development and maintenance of this site: <b>BQEJpqsrKVGdDriCo3msLRwXbBuzf2f6nw</b></li>
                         </ul>
                     </td>
                     <td style="width: 50%;padding: 0">
-                        <h2 class="subtitle1">RB1TS numbers</h2>
+                        <h2 class="subtitle1">RABB1TS numbers</h2>
                         <ul style="margin-top: 15px">
                             <li>Last Parsed Block: {{ stats["last_parsed_block"] }}</li>
-                            <li>RB1TS Supply: {{ '{:,}'.format(stats["supply"] / 10**8) }}</li>
-                            <li>RB1TS Hashes Count: {{ '{:,}'.format(stats["nice_hashes_count"])  }}</li>
+                            <li>RABB1TS Supply: {{ '{:,}'.format(stats["supply"] / 10**8) }}</li>
+                            <li>RABB1TS Hashes Count: {{ '{:,}'.format(stats["nice_hashes_count"])  }}</li>
                             <li>Rabb1test Hash: {{ display_utxo(stats["nicest_hash"]) | safe }}</li>
                             <li>Last  Hash: {{ display_utxo(stats["last_nice_hash"]) | safe }}</li>
-                            <li>First RB1TS Hash: {{ display_utxo(stats["first_nice_hash"]) | safe }}</li>
+                            <li>First RABB1TS Hash: {{ display_utxo(stats["first_nice_hash"]) | safe }}</li>
                             <li>UTXOs Count: {{ '{:,}'.format(stats["utxos_count"])  }}</li>
                         </ul>
                     </td>
@@ -56,7 +62,7 @@
             
         </section>
         <section id="text" class="container">
-            <h2 class="subtitle2">Last RB1TS hashes</h2>
+            <h2 class="subtitle2">Last RABB1TS hashes</h2>
             <div class="table-wrapper">
                 <table>
                     <tr>

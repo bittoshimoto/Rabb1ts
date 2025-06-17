@@ -1,0 +1,9 @@
+{
+  "ADDRESS": "BNCJBYc6ivwB1dnCVa3MqUyyL9L85v49zH",
+  "PRIVATE_WIF": "QUu3NozS4mu9kYUxnahtSGHjnCWAwgYTBS3mJct8TzhiVqZJfGRw",
+  "RPC_URL": "http://127.0.0.1:9876/",
+  "RPC_USER": "rpc",
+  "RPC_PASSWORD": "rpc",
+  "TARGET": 5,
+  "CORES": 6
+}

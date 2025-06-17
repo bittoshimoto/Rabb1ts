@@ -1,113 +1,129 @@
 #!/usr/bin/env python3
-import json, time
-import requests, base58, hashlib, hmac
-import ecdsa
+import os
+import json
+import time
+import sh
 
-# ─── CONFIG ─────────────────────────────────────────────────────────────────────
-RPC_URL      = "http://127.0.0.1:9876/"  # your B1T daemon RPC
-RPC_USER     = "rpc"
-RPC_PASSWORD = "rpc"
-DUST_LIMIT   = 550                        # sats
-FEE_RATE     = 1000                       # sats per kB (~0.01 B1T/kB)
-# P2PKH version for B1T (0x19) and WIF version (0x9E)
-ADDR_VERSION = 0x19
-WIF_VERSION  = 0x9E
-# ────────────────────────────────────────────────────────────────────────────────
+from bitcoinutils.transactions import Transaction
+from bitcoinutils.keys import P2wpkhAddress
+from bitcoinutils.hdwallet import HDWallet
+from bitcoinutils.setup import setup
+from nicesigner import nicesigner
 
-def rpc(method, params=None):
-    payload = {"jsonrpc":"1.0","id":"sender","method":method,"params":params or []}
-    r = requests.post(RPC_URL, auth=(RPC_USER,RPC_PASSWORD),
-                      headers={"Content-Type":"application/json"},
-                      data=json.dumps(payload))
-    r.raise_for_status()
-    res = r.json()
-    if res.get("error"):
-        raise RuntimeError(res["error"])
-    return res["result"]
+# Initialize network
+setup("mainnet")
 
-def wif_to_privkey(wif: str) -> bytes:
-    raw = base58.b58decode(wif)
-    # raw = [version (1)] + privkey (32) + [0x01 if compressed] + checksum(4)
-    if raw[0] != WIF_VERSION or len(raw) not in (38, 37):
-        raise ValueError("Invalid WIF or wrong network byte")
-    return raw[1:33]
+# Constants
+DUST_SIZE     = 550
+RPC_USER      = os.getenv("RPC_USER", "rpc")
+RPC_PASSWORD  = os.getenv("RPC_PASSWORD", "rpc")
+TARGET        = 5
+TOTAL_THREADS = 32
 
-def privkey_to_pubkey(privkey: bytes) -> bytes:
-    sk = ecdsa.SigningKey.from_string(privkey, curve=ecdsa.SECP256k1)
-    vk = sk.get_verifying_key().to_string()
-    prefix = b"\x03" if (vk[32] & 1) else b"\x02"
-    return prefix + vk[:32]
+# Locate and bake custom CLI binary in same folder
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BIT_CLI    = os.path.join(SCRIPT_DIR, "bit-cli")
+if not os.path.isfile(BIT_CLI) or not os.access(BIT_CLI, os.X_OK):
+    raise RuntimeError(f"bit-cli not found or not executable at {BIT_CLI}")
+bitcoin_cli = sh.Command(BIT_CLI).bake(
+    f"-rpcuser={RPC_USER}",
+    f"-rpcpassword={RPC_PASSWORD}"
+)
 
-def pubkey_to_p2pkh(pubkey: bytes) -> str:
-    h160 = hashlib.new("ripemd160", hashlib.sha256(pubkey).digest()).digest()
-    ext  = bytes([ADDR_VERSION]) + h160
-    chk  = hashlib.sha256(hashlib.sha256(ext).digest()).digest()[:4]
-    return base58.b58encode(ext+chk).decode()
 
-def list_utxos(addr):
-    try: rpc("importaddress",[addr,"",False])
-    except: pass
-    return rpc("listunspent",[1,9999999,[addr]])
+def get_hdwallet_address(mnemonic, derivation_path):
+    hdw = HDWallet(mnemonic=mnemonic)
+    hdw.from_path(derivation_path)
+    return hdw.get_private_key().get_public_key().get_segwit_address().to_string()
 
-def estimate_fee(n_in, n_out):
-    size = 180*n_in + 34*n_out + 10
-    return (FEE_RATE*size + 999)//1000
 
-def build_and_sign(private_wif, recipients, change_addr):
-    # 1) key & own address
-    priv = wif_to_privkey(private_wif)
-    pub  = privkey_to_pubkey(priv)
-    me   = pubkey_to_p2pkh(pub)
-    # 2) gather UTXOs
-    utxos = list_utxos(me)
-    if not utxos:
-        raise RuntimeError("No UTXOs to spend.")
-    total_in = 0
-    for u in utxos:
-        sats = int(u["amount"]*1e8)
-        total_in += sats
-    # 3) compute required
-    want = sum(r[1] for r in recipients)
-    # one extra change output
-    fee = estimate_fee(len(utxos), len(recipients)+1)
-    if total_in < want + fee + DUST_LIMIT:
-        raise RuntimeError(f"Need ≥{want+fee+DUST_LIMIT} sats, have {total_in}")
-    change = total_in - want - fee
-    # 4) make outputs map
-    outs = { addr: sats/1e8 for addr,sats in recipients }
-    outs[change_addr] = change/1e8
-    # 5) RPC calls
-    inputs = [ {"txid":u["txid"],"vout":u["vout"]} for u in utxos ]
-    raw = rpc("createrawtransaction",[inputs, outs])
-    signed = rpc("signrawtransaction",[raw, [], [private_wif]])
-    if not signed.get("complete"):
-        raise RuntimeError("Signing failed")
-    return signed["hex"]
+def build_nice_transaction(mnemonic, utxo_txid, utxo_vout, utxo_value, utxo_path):
+    utxo_address = get_hdwallet_address(mnemonic, utxo_path)
+    script_pubkey = P2wpkhAddress(utxo_address).to_script_pub_key().to_hex()
+    inputs  = f"{utxo_txid}:{utxo_vout}:{utxo_value}:{script_pubkey}:{utxo_path}"
+    outputs = ""
 
-def main():
-    print("\n== RB1TS Sender ==")
-    wif = input("Enter your PRIVATE WIF (not stored): ").strip()
-    total_rb = int(float(input("Total RB1TS to send: ").strip())*1e8)
-    n = int(input("How many recipients? ").strip())
-    recs = []
-    sofar = 0
-    for i in range(n):
-        a = input(f" Recipient #{i+1} address: ").strip()
-        sats = int(float(input(f"  → RB1TS sats to send to #{i+1}: ").strip())*1e8)
-        recs.append((a, sats))
-        sofar += sats
-    if sofar != total_rb:
-        raise RuntimeError(f"Sum of splits {sofar} ≠ total {total_rb}")
-    change = input("Change address: ").strip()
+    base_path     = "m/44'/3141'/0'/0"
+    first_thread  = 0
+    num_threads   = TOTAL_THREADS
+    total_threads = TOTAL_THREADS
+    target        = TARGET
+    output_value  = utxo_value - 330  # vsize 110 * 3
+    if output_value < DUST_SIZE:
+        raise ValueError("Output value is too low")
 
-    print("\nBuilding transaction…")
-    txhex = build_and_sign(wif, recs, change)
-    print("Raw TX hex:", txhex)
-    if input("Broadcast? [y/N] ").lower().startswith("y"):
-        txid = rpc("sendrawtransaction",[txhex])
-        print("✅ TX broadcast:", txid)
-    else:
-        print("OK, not broadcast.")
+    tx_hex, derivation_path = nicesigner.build_transaction(
+        inputs,
+        outputs,
+        mnemonic,
+        base_path,
+        first_thread,
+        num_threads,
+        total_threads,
+        target,
+        output_value,
+    )
+    return tx_hex, derivation_path, output_value
 
-if __name__=="__main__":
-    main()
+
+def backup_tx(batch_name, txid, derivation_path, utxo_value, tx_hex):
+    with open(f"{batch_name}-{txid}.json", "w") as f:
+        json.dump({
+            "txid": txid,
+            "raw_tx": tx_hex,
+            "path": derivation_path,
+            "value": utxo_value,
+        }, f)
+    print(f"Backuped tx {txid} to {batch_name}-{txid}.json")
+
+
+def mint_mihn(mnemonic, utxo_txid, utxo_vout, utxo_value, utxo_path, batch_name, counter=1):
+    next_utxo_txid = utxo_txid
+    next_utxo_vout = utxo_vout
+    next_utxo_value = utxo_value
+    next_utxo_path = utxo_path
+
+    while next_utxo_value > DUST_SIZE + 330:
+        tx_hex, next_utxo_path, next_utxo_value = build_nice_transaction(
+            mnemonic,
+            next_utxo_txid,
+            next_utxo_vout,
+            next_utxo_value,
+            next_utxo_path
+        )
+        tx = Transaction.from_raw(tx_hex)
+        next_utxo_txid = tx.get_txid()
+        next_utxo_vout = 0
+
+        while True:
+            try:
+                sent_txid = bitcoin_cli("sendrawtransaction", tx_hex).strip()
+                break
+            except sh.ErrorReturnCode_26:
+                print("Resending tx in 2 minutes...")
+                time.sleep(120)
+
+        backup_tx(
+            f"{batch_name}-{counter}",
+            next_utxo_txid,
+            next_utxo_path,
+            next_utxo_value,
+            tx_hex,
+        )
+        print(f"Sent tx {sent_txid}")
+        assert sent_txid == next_utxo_txid
+        counter += 1
+
+
+# use genwallet.py to generate mnemonic and address
+mnemonic = "timber december tail such surprise sausage time warfare lamp enlist thank agent"
+address_path = "m/44'/3141'/0'/0/1"
+
+txid = ""  # utxo txid
+vout = 0     # utxo vout
+value = 84807  # utxo value
+batch_name = "mybatch"
+
+mint_mihn(mnemonic, txid, vout, value, address_path, batch_name)
+
+
