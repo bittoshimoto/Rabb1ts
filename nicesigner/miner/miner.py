@@ -118,7 +118,7 @@ def miner_thread(idx, txid, vout, sats, script_hex):
 
 def main():
     txid, vout, sats, script_hex = fetch_utxo()
-    print(f"Mining from UTXO: {txid} vout={vout} sats={sats}\n")
+    print(f"Mining from UTXO: {txid} vout={vout} tos={sats}\n")
 
     procs = []
     for i in range(CORES):
