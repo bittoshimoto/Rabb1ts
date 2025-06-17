@@ -145,9 +145,9 @@ def main():
 
     if found_result.value:
         result = json.load(open("FOUND.json"))
-        print(f"\n✅ Found nice TX (sequence={result['seq']})")
+        print(f"\n🥕 Carrots set sail through the zeros! (sequence={result['seq']})")
         sent = rpc("sendrawtransaction", [result["hex"]])
-        print(f"🎉 Broadcast TX {sent}")
+        print(f"🐇 RABB1TS uncovered in a sea of zeros! TXID: {sent}")
     else:
         print("\nNo result.")
 
