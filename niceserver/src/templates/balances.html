@@ -1,66 +1,109 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <title>RABB1TS</title>
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <meta name="description" content="" />
-    <link rel="icon" href="favicon.png">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Recursive:wght@300..1000&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ css_url }}">
+  <meta charset="UTF-8" />
+  <title>Balances – RABB1TS</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="icon" href="{{ url_for('static', filename='favicon.png') }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ css_url }}" />
 </head>
 <body>
-    <div id="top" role="document">
-    <div class="page">
-
-    <header class="page__header">
-        <div class="container section">
-            <h1><a href="/">RABB1TS</a></h1>
-            <p><b>Make your B1T transactions te be a carrot and earn RB1TS.</b></p>
-      <nav class="page__nav">
-        <a href="{{ url_for('home') }}">Home</a> |
-        <a href="{{ url_for('balances') }}">Balances</a> |
-        <a href="{{ url_for('send') }}">Send</a> |
-        <a href="{{ url_for('protocol') }}">Protocol</a> 
-      </nav>
+  <header class="header">
+    <div class="container">
+      <div class="header-content">
+        <div class="logo">
+          <img src="{{ url_for('static', filename='followtherabbit.png') }}" alt="RABB1TS Logo">
+          <h1><a href="/">RABB1TS</a></h1>
         </div>
-    </header>
+        <nav class="nav">
+          <a href="{{ url_for('home') }}">Home</a>
+          <a href="{{ url_for('balances') }}" class="nav-active">Balances</a>
+          <a href="{{ url_for('send') }}">Send</a>
+          <a href="{{ url_for('protocol') }}">Protocol</a>
+        </nav>
+      </div>
+    </div>
+  </header>
 
-    <main class="page__content">
-        <section id="text" class="container">
-            <h2 class="subtitle1">Get balances by address</h2>
-            <form action="/balances" method="get">
-                <label for="address">B1T address:</label>
-                <input type="text" id="address" name="address" required>
-                <button type="submit">Get balance</button>
-            </form>
-        </section>
+  <main class="page__content">
+    <div class="info-banner">
+      <div class="container">
+        <div class="banner-content">
+          <div class="banner-icon">💰</div>
+          <div class="banner-text">
+            <p><strong>Check Balance:</strong> Enter your B1T address to view your RABB1TS balance and transaction history.</p>
+            <p><em>Track your earned tokens from beautiful transactions!</em></p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <section class="features-section">
+      <div class="container">
+        <div class="feature-card" style="max-width: 600px; margin: 0 auto;">
+          <div class="feature-icon">🔍</div>
+          <h3>Check Balance</h3>
+          <p>Check your B1T address's RABB1TS balance and transaction history</p>
+          <form action="{{ url_for('balances') }}" method="get" class="balance-form">
+            <div class="form-group">
+              <label for="address" class="form-label">B1T Address</label>
+              <input type="text" id="address" name="address" value="{{ address or '' }}" 
+                     class="form-input" placeholder="Enter your B1T address" required />
+            </div>
+            <button type="submit" class="btn btn-primary btn-full">Check Balance</button>
+          </form>
+        </div>
+
         {% if address %}
-        <section id="text" class="container">
-            <h2 class="subtitle2">{{ display_quantity(balance['total_balance']) }}</h2>
-            <h4>UTXOs for {{ address }}</h4>
-            <div class="table-wrapper">
-                <table>
-                    <tr>
+        <div class="balance-results">
+          <div class="balance-card">
+            <h3 class="balance-title">Balance for</h3>
+            <p class="address-display">{{ address }}</p>
+            <div class="balance-amount">
+              <span class="balance-label">RABB1TS Balance</span>
+              <span class="balance-value">{{ display_quantity(balance['total_balance']) }}</span>
+            </div>
+          </div>
+          
+          {% if balance['utxos'] %}
+          <div class="transactions-card">
+            <h4 class="transactions-title">UTXOs for {{ address }}</h4>
+            <div class="table-container">
+              <table class="transactions-table">
+                <thead>
+                  <tr>
                     <th>UTXO</th>
                     <th>Quantity</th>
-                    </tr>
-                    {% for balance in balance['utxos'] %}
-                    <tr>
-                        {% set txid_only = balance["utxo"].split(':')[0] %}
-                        <td>{{ display_utxo(txid_only, True) | safe }}</td>
-                        <td style="text-align: right;">{{ display_quantity(balance["balance"]) }}</td>
-                    </tr>
-                    {% endfor %}
-                </table>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for utxo_balance in balance['utxos'] %}
+                  <tr>
+                    {% set txid_only = utxo_balance["utxo"].split(':')[0] %}
+                    <td class="txid-cell">{{ display_utxo(txid_only, True) | safe }}</td>
+                    <td class="amount-cell">{{ display_quantity(utxo_balance["balance"]) }}</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
             </div>
-        </section>
+          </div>
+          {% else %}
+          <div class="empty-state">
+            <div class="empty-icon">📭</div>
+            <h3>No UTXOs Found</h3>
+            <p>No UTXOs found for this address.</p>
+          </div>
+          {% endif %}
+        </div>
         {% endif %}
-    </main>
+        </div>
+      </div>
+    </section>
+  </main>
 
-    </div>  <!-- page -->
-    </div>  <!-- top -->
-</body>
+    </body>
 </html>

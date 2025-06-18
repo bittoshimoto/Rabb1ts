@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>RABB1TS</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="description" content="" />
+    <link rel="icon" href="favicon.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Recursive:wght@300..1000&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ css_url }}">
+</head>
+<body>
+    <div id="top" role="document">
+    <div class="page">
+
+    <header class="page__header">
+        <div class="container section">
+            <h1><a href="/">RABB1TS</a></h1>
+            <p><b>Make your B1T transactions te be a carrot and earn RB1TS.</b></p>
+      <nav class="page__nav">
+        <a href="{{ url_for('home') }}">Home</a> |
+        <a href="{{ url_for('balances') }}">Balances</a> |
+        <a href="{{ url_for('send') }}">Send</a> |
+        <a href="{{ url_for('protocol') }}">Protocol</a> 
+      </nav>
+        </div>
+    </header>
+
+    <main class="page__content">
+        <section id="text" class="container">
+            <h2 class="subtitle1">Get balances by address</h2>
+            <form action="/balances" method="get">
+                <label for="address">B1T address:</label>
+                <input type="text" id="address" name="address" required>
+                <button type="submit">Get balance</button>
+            </form>
+        </section>
+        {% if address %}
+        <section id="text" class="container">
+            <h2 class="subtitle2">{{ display_quantity(balance['total_balance']) }}</h2>
+            <h4>UTXOs for {{ address }}</h4>
+            <div class="table-wrapper">
+                <table>
+                    <tr>
+                    <th>UTXO</th>
+                    <th>Quantity</th>
+                    </tr>
+                    {% for balance in balance['utxos'] %}
+                    <tr>
+                        {% set txid_only = balance["utxo"].split(':')[0] %}
+                        <td>{{ display_utxo(txid_only, True) | safe }}</td>
+                        <td style="text-align: right;">{{ display_quantity(balance["balance"]) }}</td>
+                    </tr>
+                    {% endfor %}
+                </table>
+            </div>
+        </section>
+        {% endif %}
+    </main>
+
+    </div>  <!-- page -->
+    </div>  <!-- top -->
+</body>
+</html>

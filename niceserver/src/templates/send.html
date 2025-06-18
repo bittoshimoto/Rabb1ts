@@ -7,157 +7,224 @@
   <link rel="icon" href="{{ url_for('static', filename='favicon.png') }}">
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Recursive:wght@300..1000&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="{{ css_url }}" />
 </head>
 <body>
-  <header class="page__header">
-    <div class="container section">
-      <h1><a href="/">RABB1TS</a></h1>
-      <p><b>Make your B1T transactions te be a carrot and earn RB1TS.</b></p>
-      <nav class="page__nav">
-        <a href="{{ url_for('home') }}">Home</a> |
-        <a href="{{ url_for('balances') }}">Balances</a> |
-        <a href="{{ url_for('send') }}">Send</a> |
-        <a href="{{ url_for('protocol') }}">Protocol</a> 
-      </nav>
+  <header class="header">
+    <div class="container">
+      <div class="header-content">
+        <div class="logo">
+          <img src="{{ url_for('static', filename='followtherabbit.png') }}" alt="RABB1TS Logo">
+          <h1><a href="/">RABB1TS</a></h1>
+        </div>
+        <nav class="nav">
+          <a href="{{ url_for('home') }}">Home</a>
+          <a href="{{ url_for('balances') }}">Balances</a>
+          <a href="{{ url_for('send') }}" class="nav-active">Send</a>
+          <a href="{{ url_for('protocol') }}">Protocol</a>
+        </nav>
+      </div>
     </div>
   </header>
 
   <main class="page__content">
-    {# STEP 1: Enter WIF & Address #}
-    {% if not utxos and not txhex and not broadcast %}
-    <section class="container">
-      <h2>Step 1: Enter Credentials</h2>
-      <form action="{{ url_for('send') }}" method="get">
-        <label>Your PRIVATE WIF (not stored):</label>
-        <input type="password" name="wif" value="{{ wif or '' }}" required />
-        <label>Your B1T Address:</label>
-        <input type="text" name="address" value="{{ address or '' }}" required />
-        <button type="submit">Load UTXOs</button>
-      </form>
-    </section>
-    {% endif %}
+    <div class="info-banner">
+      <div class="container">
+        <div class="banner-content">
+          <div class="banner-icon">💸</div>
+          <div class="banner-text">
+            <p><strong>Send RABB1TS:</strong> Transfer your earned RABB1TS tokens to other addresses securely.</p>
+            <p><em>Share the beauty of your transactions!</em></p>
+          </div>
+        </div>
+      </div>
+    </div>
 
-    {# STEP 2: Show UTXOs + Amounts & Addresses #}
-    {% if utxos and not txhex and not broadcast %}
-    <section class="container">
-      <h2>Step 2: Build Transaction</h2>
-      <form action="{{ url_for('send') }}" method="post" id="send-form">
-        <input type="hidden" name="wif"     value="{{ wif }}" />
-        <input type="hidden" name="address" value="{{ address }}" />
+    <section class="features-section">
+      <div class="container">
+        {# STEP 1: Enter WIF & Address #}
+        {% if not utxos and not txhex and not broadcast %}
+        <div class="feature-card" style="max-width: 600px; margin: 0 auto;">
+          <div class="feature-icon">🔐</div>
+          <h3>Enter Credentials</h3>
+          <p>Enter your private WIF and B1T address to load your UTXOs</p>
+          <form action="{{ url_for('send') }}" method="get" class="send-form">
+            <div class="form-group">
+              <label for="wif" class="form-label">Your PRIVATE WIF (not stored)</label>
+              <input type="password" id="wif" name="wif" value="{{ wif or '' }}" 
+                     class="form-input" placeholder="Enter your private WIF" required />
+            </div>
+            <div class="form-group">
+              <label for="address" class="form-label">Your B1T Address</label>
+              <input type="text" id="address" name="address" value="{{ address or '' }}" 
+                     class="form-input" placeholder="Enter your B1T address" required />
+            </div>
+            <button type="submit" class="btn btn-primary btn-full">Load UTXOs</button>
+          </form>
+        </div>
+        {% endif %}
 
-        <table class="utxo-table">
-          <thead>
-            <tr><th>Select</th><th>TxID that have RABB1TS</th><th>Vout</th><th>Sats</th></tr>
-          </thead>
-          <tbody>
-            {% for utxo in utxos %}
-            <tr>
-              <td>
-                <input
-                  type="radio"
-                  name="utxo_index"
-                  value="{{ loop.index0 }}"
-                  {% if loop.first %}checked{% endif %}
-                />
-              </td>
-              <td>{{ utxo.txid }}</td>
-              <td>{{ utxo.vout }}</td>
-              <td>{{ utxo.sats }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+        {# STEP 2: Show UTXOs + Amounts & Addresses #}
+        {% if utxos and not txhex and not broadcast %}
+        <div class="feature-card" style="max-width: 800px; margin: 0 auto;">
+          <div class="feature-icon">🔨</div>
+          <h3>Build Transaction</h3>
+          <p>Select UTXO and configure your transaction details</p>
+            <form action="{{ url_for('send') }}" method="post" id="send-form" class="send-form">
+              <input type="hidden" name="wif"     value="{{ wif }}" />
+              <input type="hidden" name="address" value="{{ address }}" />
 
-        <label>How many total RB1TS do you hold?</label>
-        <input type="number" step="any" name="total_rb" id="total_rb"
-               value="{{ total_rb or '' }}" required />
+              <div class="utxo-section">
+                <h3 class="section-title">Select UTXO</h3>
+                <div class="table-container">
+                  <table class="utxo-table">
+                    <thead>
+                      <tr><th>Select</th><th>TxID that have RABB1TS</th><th>Vout</th><th>Sats</th></tr>
+                    </thead>
+                    <tbody>
+                      {% for utxo in utxos %}
+                      <tr>
+                        <td class="center-cell">
+                          <input
+                            type="radio"
+                            name="utxo_index"
+                            value="{{ loop.index0 }}"
+                            {% if loop.first %}checked{% endif %}
+                            class="radio-input"
+                          />
+                        </td>
+                        <td class="txid-cell">{{ utxo.txid }}</td>
+                        <td class="center-cell">{{ utxo.vout }}</td>
+                        <td class="amount-cell">{{ utxo.sats }}</td>
+                      </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
 
-        <label>How many RB1TS to send?</label>
-        <input type="number" step="any" name="send_rb" id="send_rb"
-               value="{{ send_rb or '' }}" required />
+              <div class="form-section">
+                <h3 class="section-title">Transaction Details</h3>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="total_rb" class="form-label">How many total RB1TS do you hold?</label>
+                    <input type="number" step="any" name="total_rb" id="total_rb"
+                           value="{{ total_rb or '' }}" class="form-input" required />
+                  </div>
+                  <div class="form-group">
+                    <label for="send_rb" class="form-label">How many RB1TS to send?</label>
+                    <input type="number" step="any" name="send_rb" id="send_rb"
+                           value="{{ send_rb or '' }}" class="form-input" required />
+                  </div>
+                </div>
 
-        <label>Recipient address:</label>
-        <input type="text" name="recv_addr" required />
+                <div class="form-group">
+                  <label for="recv_addr" class="form-label">Recipient address</label>
+                  <input type="text" id="recv_addr" name="recv_addr" class="form-input" 
+                         placeholder="Enter recipient address" required />
+                </div>
 
-        <!-- Rest-address row, toggled by JS -->
-        <div id="rest-row">
-          <label>Rest address:</label>
-          <input type="text" name="rest_addr" />
+                <!-- Rest-address row, toggled by JS -->
+                <div id="rest-row" class="form-group">
+                  <label for="rest_addr" class="form-label">Rest address</label>
+                  <input type="text" id="rest_addr" name="rest_addr" class="form-input" 
+                         placeholder="Enter rest address" />
+                </div>
+
+                <div class="form-group">
+                  <label for="change_addr" class="form-label">Change address</label>
+                  <input type="text" id="change_addr" name="change_addr" class="form-input" 
+                         placeholder="Enter change address" required />
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-full">Preview Transaction</button>
+              </div>
+            </form>
+          </div>
         </div>
 
-        <label>Change address:</label>
-        <input type="text" name="change_addr" required />
+        <!-- JavaScript to hide/show Rest row -->
+        <script>
+          const totalIn = document.getElementById('total_rb');
+          const sendIn  = document.getElementById('send_rb');
+          const restRow = document.getElementById('rest-row');
+          const sendForm = document.getElementById('send-form');
 
-        <button type="submit">Preview Transaction</button>
-      </form>
-
-      <!-- JavaScript to hide/show Rest row -->
-      <script>
-        const totalIn = document.getElementById('total_rb');
-        const sendIn  = document.getElementById('send_rb');
-        const restRow = document.getElementById('rest-row');
-        const sendForm = document.getElementById('send-form');
-
-        function toggleRest() {
-          if (totalIn.value && sendIn.value &&
-              Number(totalIn.value) === Number(sendIn.value)) {
-            restRow.style.display = 'none';
-            if (!document.querySelector('input[name=rest_addr][type=hidden]')) {
-              const h = document.createElement('input');
-              h.type  = 'hidden';
-              h.name  = 'rest_addr';
-              h.value = document.querySelector('input[name=address]').value;
-              sendForm.appendChild(h);
+          function toggleRest() {
+            if (totalIn.value && sendIn.value &&
+                Number(totalIn.value) === Number(sendIn.value)) {
+              restRow.style.display = 'none';
+              if (!document.querySelector('input[name=rest_addr][type=hidden]')) {
+                const h = document.createElement('input');
+                h.type  = 'hidden';
+                h.name  = 'rest_addr';
+                h.value = document.querySelector('input[name=address]').value;
+                sendForm.appendChild(h);
+              }
+            } else {
+              restRow.style.display = '';
+              const h = document.querySelector('input[name=rest_addr][type=hidden]');
+              if (h) h.remove();
             }
-          } else {
-            restRow.style.display = '';
-            const h = document.querySelector('input[name=rest_addr][type=hidden]');
-            if (h) h.remove();
           }
-        }
 
-        totalIn.addEventListener('input', toggleRest);
-        sendIn.addEventListener('input',  toggleRest);
-        // initialize on load
-        toggleRest();
-      </script>
-    </section>
-    {% endif %}
+          totalIn.addEventListener('input', toggleRest);
+          sendIn.addEventListener('input',  toggleRest);
+          // initialize on load
+          toggleRest();
+        </script>
+        {% endif %}
 
-    {# STEP 3: Preview & Confirm #}
-    {% if txhex and not broadcast %}
-    <section class="container">
-      <h2>Step 3: Preview & Confirm</h2>
-      <pre class="tx-preview">{{ txhex }}</pre>
-      <div class="confirm-buttons">
-        <form action="{{ url_for('send') }}" method="post" style="display:inline">
-          <input type="hidden" name="confirm" value="yes" />
-          <input type="hidden" name="txhex"   value="{{ txhex }}" />
-          <button type="submit">Yes, Broadcast</button>
-        </form>
-        <form action="{{ url_for('send') }}" method="post" style="display:inline">
-          <input type="hidden" name="confirm" value="no" />
-          <button type="submit">No, Cancel</button>
-        </form>
+        {# STEP 3: Preview & Confirm #}
+        {% if txhex and not broadcast %}
+        <div class="feature-card" style="max-width: 800px; margin: 0 auto;">
+          <div class="feature-icon">👀</div>
+          <h3>Preview & Confirm</h3>
+          <p>Review your transaction before broadcasting</p>
+          <div class="tx-preview-section">
+            <h4 class="section-title">Transaction Preview</h4>
+            <div class="tx-preview-box">
+              <pre class="tx-preview">{{ txhex }}</pre>
+            </div>
+          </div>
+          <div class="confirm-buttons">
+            <form action="{{ url_for('send') }}" method="post" style="display:inline">
+              <input type="hidden" name="confirm" value="yes" />
+              <input type="hidden" name="txhex"   value="{{ txhex }}" />
+              <button type="submit" class="btn btn-primary">Yes, Broadcast</button>
+            </form>
+            <form action="{{ url_for('send') }}" method="post" style="display:inline">
+              <input type="hidden" name="confirm" value="no" />
+              <button type="submit" class="btn btn-secondary">No, Cancel</button>
+            </form>
+          </div>
+        </div>
+        {% endif %}
+
+        {# STEP 4: Result #}
+        {% if broadcast %}
+        <div class="feature-card" style="max-width: 600px; margin: 0 auto;">
+          <div class="feature-icon">{{ '✅' if success else '❌' }}</div>
+          <h3>Broadcast {{ 'Succeeded' if success else 'Failed' }}</h3>
+          <p>{{ 'Your transaction has been successfully broadcast!' if success else 'There was an error broadcasting your transaction.' }}</p>
+          {% if success %}
+            <div class="result-details">
+              <p class="result-label">Transaction ID:</p>
+              <code class="txid-display">{{ txid }}</code>
+            </div>
+          {% else %}
+            <div class="error-details">
+              <p class="error-message">{{ error }}</p>
+            </div>
+          {% endif %}
+          <div class="result-actions">
+            <a href="{{ url_for('home') }}" class="btn btn-primary">Back to Home</a>
+          </div>
+        </div>
+        {% endif %}
       </div>
     </section>
-    {% endif %}
-
-    {# STEP 4: Result #}
-    {% if broadcast %}
-    <section class="container">
-      <h2>Step 4: Result</h2>
-      <p>Broadcast {{ 'succeeded' if success else 'failed' }}.</p>
-      {% if success %}
-        <p>TXID: <code>{{ txid }}</code></p>
-      {% else %}
-        <p class="error">Error: {{ error }}</p>
-      {% endif %}
-      <p><a href="{{ url_for('home') }}">Back to Home</a></p>
-    </section>
-    {% endif %}
   </main>
 </body>
 </html>
