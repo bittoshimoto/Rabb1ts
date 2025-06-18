@@ -1,7 +1,6 @@
 import time
 import sys
 import signal
-import time
 
 from rb1tsstore import Rb1tsStore
 from config import Config
