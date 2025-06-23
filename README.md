@@ -88,7 +88,6 @@ pip install nicesigner bitcoinutils requests
 
 ## 📄 License
 
-Distributed under the [MIT License](LICENSE).
 Feel free to open issues or submit pull requests!
 
 Copyright: Ouziel Slama & Bit developers
