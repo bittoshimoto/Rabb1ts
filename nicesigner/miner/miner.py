@@ -48,12 +48,14 @@ TX_SIZE_EST       = 148 + 34 + 10
 FEE               = int(math.ceil(RATE_SAT_PER_BYTE * TX_SIZE_EST))
 DUST              = 550
 
-print(f"Fee={FEE} tos ({MIN_FEE_PER_KB} B1T/kB × {TX_SIZE_EST} B)")
+print(f"Fee={FEE} satoshis ({MIN_FEE_PER_KB} B1T/kB × {TX_SIZE_EST} bytes)")
 print(f"→ Using {CORES} processes, target={TARGET} leading zeros\n")
 
 setup("mainnet")
 
-BLOCKBOOK_API = "https://blockbook.b1tcore.org/api/v2/utxo/"
+# Blockbook endpoints
+BLOCKBOOK_UTXO_API = "https://blockbook.b1tcore.org/api/v2/utxo/"
+BLOCKBOOK_TX_API   = "https://blockbook.b1tcore.org/api/v2/tx/"
 
 def rpc(method, params=None):
     payload = {"jsonrpc":"1.0","id":"miner","method":method,"params":params or []}
@@ -65,24 +67,28 @@ def rpc(method, params=None):
     return resp['result']
 
 def fetch_utxo():
-    resp = requests.get(f"{BLOCKBOOK_API}{ADDRESS}?confirmed=true")
+    # fetch all confirmed UTXOs from Blockbook
+    resp = requests.get(f"{BLOCKBOOK_UTXO_API}{ADDRESS}?confirmed=true")
     resp.raise_for_status()
     utxos = resp.json()
+
     candidates = []
     for u in utxos:
         sats = int(u["value"])
         if sats <= DUST + FEE:
             continue
-        info = rpc("gettxout", [u["txid"], u["vout"], True])
-        # if the UTXO isn't yet in our node's view (unconfirmed/spent), retry
-        if info is None:
-            print(f"[fetch_utxo] UTXO {u['txid']}:{u['vout']} not yet confirmed; retrying in 60s…")
-            time.sleep(60)
-            return fetch_utxo()
-        script_hex = info["scriptPubKey"]["hex"]
+
+        # fetch the full TX so we can extract the output script
+        tx = requests.get(f"{BLOCKBOOK_TX_API}{u['txid']}").json()
+        # in v2, scriptPubKey is in vout[].hex
+        script_hex = tx["vout"][u["vout"]]["hex"]
+
         candidates.append((u["txid"], u["vout"], sats, script_hex))
+
     if not candidates:
         raise RuntimeError(f"No UTXOs > {DUST+FEE} sats; fund {ADDRESS} and retry.")
+
+    # pick the largest UTXO
     return max(candidates, key=lambda x: x[2])
 
 # shared between processes:
@@ -94,12 +100,20 @@ def miner_thread(idx, txid, vout, sats, script_hex):
     sequence = idx
     prefix   = '0' * TARGET
     while not found_event.is_set():
-        raw = rpc("createrawtransaction", [[{"txid":txid,"vout":vout,"sequence":sequence}],
-                                           {ADDRESS:(sats-FEE)/1e8}, 0])
-        signed = rpc("signrawtransaction", [raw, [{"txid":txid,"vout":vout,
-                                                   "scriptPubKey":script_hex,
-                                                   "amount":sats/1e8}],
-                                              [PRIVATE_WIF]])
+        raw = rpc(
+            "createrawtransaction",
+            [[{"txid":txid, "vout":vout, "sequence":sequence}],
+             {ADDRESS: (sats - FEE) / 1e8}, 0]
+        )
+        signed = rpc(
+            "signrawtransaction",
+            [raw,
+             [{"txid":txid, "vout":vout,
+               "scriptPubKey":script_hex,
+               "amount":sats/1e8}],
+             [PRIVATE_WIF]]
+        )
+
         with total_attempts.get_lock():
             total_attempts.value += 1
 
@@ -107,9 +121,8 @@ def miner_thread(idx, txid, vout, sats, script_hex):
             hex_signed = signed['hex']
             tid = Transaction.from_raw(hex_signed).get_txid()
             if tid.startswith(prefix):
-                # stash both hex+sequence in a small file
-                with open("FOUND.json","w") as f:
-                    json.dump({"hex":hex_signed,"seq":sequence}, f)
+                with open("FOUND.json", "w") as f:
+                    json.dump({"hex":hex_signed, "seq":sequence}, f)
                 found_result.value = True
                 found_event.set()
                 return
@@ -118,7 +131,7 @@ def miner_thread(idx, txid, vout, sats, script_hex):
 
 def main():
     txid, vout, sats, script_hex = fetch_utxo()
-    print(f"Mining from UTXO: {txid} vout={vout} tos={sats}\n")
+    print(f"Mining from UTXO: {txid} vout={vout} sats={sats}\n")
 
     procs = []
     for i in range(CORES):
@@ -135,7 +148,7 @@ def main():
             now = total_attempts.value
             rate = now - last
             last = now
-            print(f"Hashrate: {rate:,} txid/s, total attempts: {now:,}", end="\r")
+            print(f"Hashrate: {rate:,} tx/s, total attempts: {now:,}", end="\r")
     except KeyboardInterrupt:
         print("\nAborted by user")
         found_event.set()
