@@ -292,7 +292,7 @@ class Rb1tsDatabase:
         """)
 
         first_hash = utils.inverse_hash(
-            "0000074dddf315742aff0be5db4e1f36974be37893bd903a70fcc43d8893901f"
+            "000001919aed4ec770e6f62886ded9ab31fd17b1aa64d32ef68ee7f1b0cc08ee"
         )
         cursor.execute(
             """
