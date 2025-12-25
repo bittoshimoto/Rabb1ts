@@ -2,13 +2,13 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
-    <title>RABB1TS</title>
+    <title>RABB1TS - Mine Transactions, Not Blocks</title>
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <meta name="description" content="Make your B1T transactions te be a carrot and earn RB1TS" />
-    <link rel="icon" href="favicon.png">
+    <link rel="icon" href="{{ url_for('static', filename='followtherabbit.png') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Recursive:wght@300..1000&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ css_url }}">
 </head>
 <body>
@@ -16,68 +16,164 @@
     <div class="page">
 
     <header class="page__header">
-        <div class="container section">
-            <h1><a href="/">RABB1TS</a></h1>
-            <p><b>Make your B1T transactions te be a carrot and earn RB1TS.</b></p>
-      <nav class="page__nav">
-        <a href="{{ url_for('home') }}">Home</a> |
-        <a href="{{ url_for('balances') }}">Balances</a> |
-        <a href="{{ url_for('send') }}">Send</a> |
-        <a href="{{ url_for('protocol') }}">Protocol</a> 
-      </nav>
-            <p>If your transaction txid starts with 5 or more zeros you earn RB1TS.</p>
-            <p>Don't be cheesy, mine transactions not blocks!</p>
+        <div class="hero-section">
+            <div class="container">
+                <div class="hero-content">
+                    <div class="logo-section">
+                        <img src="{{ url_for('static', filename='followtherabbit.png') }}" alt="RABB1TS Logo" class="logo">
+                        <h1><a href="/">RABB1TS</a></h1>
+                    </div>
+                    <p class="hero-tagline">Make your B1T transactions te be a carrot and earn RB1TS.</p>
+                    <div class="hero-stats">
+                        <div class="stat-card">
+                            <span class="stat-number">{{ '{:,}'.format(stats["supply"] / 10**8) }}</span>
+                            <span class="stat-label">Total Supply</span>
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-number">{{ '{:,}'.format(stats["nice_hashes_count"]) }}</span>
+                            <span class="stat-label">Nice Hashes</span>
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-number">{{ stats["last_parsed_block"] }}</span>
+                            <span class="stat-label">Last Block</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
+        <nav class="main-nav">
+            <div class="container">
+                <div class="nav-links">
+                    <a href="{{ url_for('home') }}" class="nav-link active">Home</a>
+                    <a href="{{ url_for('balances') }}" class="nav-link">Balances</a>
+                    <a href="{{ url_for('send') }}" class="nav-link">Send</a>
+                    <a href="{{ url_for('protocol') }}" class="nav-link">Protocol</a>
+                </div>
+            </div>
+        </nav>
     </header>
 
     <main class="page__content">
-        <section id="text" class="container">
-            <table>
-                <tr style="border: 0;">
-                    <td style="width: 50%;padding: 0">
-                        <h2 class="subtitle1">RABB1TS links</h2>
-                        <ul style="margin-top: 15px;padding-right: 15px;">
-                            <li>Check your B1T address's <a href="balances">RABB1TS balance</a>.</li>
-                            <li>Send RABB1TS: <a href="send">Send</a>.</li>
-                            <li>Read the <a href="protocol">RABB1TS Protocol</a> to learn more about RABB1TS project.</li>
-                            <li>Download the <a href="https://github.com/bittoshimoto/Rabb1ts/">Nicesigner</a> written in Python to start mining your transactions.</li>
-                            <li>Follow us on Twitter/X: <a href="https://x.com/bittoshimo">https://x.com/bittoshimo</a>.</li>
-                            <li>Make a donation to support the development and maintenance of this site: <b>BQEJpqsrKVGdDriCo3msLRwXbBuzf2f6nw</b></li>
-                        </ul>
-                    </td>
-                    <td style="width: 50%;padding: 0">
-                        <h2 class="subtitle1">RABB1TS numbers</h2>
-                        <ul style="margin-top: 15px">
-                            <li>Last Parsed Block: {{ stats["last_parsed_block"] }}</li>
-                            <li>RABB1TS Supply: {{ '{:,}'.format(stats["supply"] / 10**8) }}</li>
-                            <li>RABB1TS Hashes Count: {{ '{:,}'.format(stats["nice_hashes_count"])  }}</li>
-                            <li>Rabb1t Best Hash: {{ display_utxo(stats["nicest_hash"]) | safe }}</li>
-                            <li>Last  Hash: {{ display_utxo(stats["last_nice_hash"]) | safe }}</li>
-                            <li>First RABB1TS Hash: {{ display_utxo(stats["first_nice_hash"]) | safe }}</li>
-                            <li>UTXOs Count: {{ '{:,}'.format(stats["utxos_count"])  }}</li>
-                        </ul>
-                    </td>
-                </tr>
-            </table>
-            
+        <div class="info-banner">
+            <div class="container">
+                <div class="banner-content">
+                    <div class="banner-icon">🥕</div>
+                    <div class="banner-text">
+                        <p><strong>How it works:</strong> If your transaction txid starts with 5 or more zeros you earn RB1TS.</p>
+                        <p><em>Don't be cheesy, mine transactions not blocks!</em></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <section class="stats-section">
+            <div class="container">
+                <h2>Network Statistics</h2>
+                <div class="stats-grid-horizontal">
+                    <div class="stat-item">
+                        <span class="stat-label">Rabb1t Best Hash</span>
+                        <span class="stat-value hash-value">{{ display_utxo(stats["nicest_hash"]) | safe }}</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Latest Hash</span>
+                        <span class="stat-value hash-value">{{ display_utxo(stats["last_nice_hash"]) | safe }}</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">First Hash</span>
+                        <span class="stat-value hash-value">{{ display_utxo(stats["first_nice_hash"]) | safe }}</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">UTXOs Count</span>
+                        <span class="stat-value">{{ '{:,}'.format(stats["utxos_count"]) }}</span>
+                    </div>
+                </div>
+            </div>
         </section>
-        <section id="text" class="container">
-            <h2 class="subtitle2">Last RABB1TS hashes</h2>
-            <div class="table-wrapper">
-                <table>
-                    <tr>
-                    <th>Block</th>
-                    <th>Txid</th>
-                    <th>Reward</th>
-                    </tr>
-                    {% for reward in rewards %}
-                    <tr>
-                        <td>{{ reward["height"] }}</td>
-                        <td>{{ display_utxo(reward["txid"], True) | safe }}</td>
-                        <td style="text-align: right;">{{ display_quantity(reward["reward"]) }}</td>
-                    </tr>
-                    {% endfor %}
-                </table>
+
+        <section class="features-section">
+            <div class="container">
+                <div class="features-grid-horizontal">
+                    <div class="feature-card">
+                        <div class="feature-icon">💰</div>
+                        <h3>Check Balance</h3>
+                        <p>Check your B1T address's RABB1TS balance and transaction history.</p>
+                        <a href="{{ url_for('balances') }}" class="btn btn-primary">View Balances</a>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <div class="feature-icon">📤</div>
+                        <h3>Send RABB1TS</h3>
+                        <p>Transfer your earned RABB1TS tokens to other addresses securely.</p>
+                        <a href="{{ url_for('send') }}" class="btn btn-primary">Send Tokens</a>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <div class="feature-icon">📖</div>
+                        <h3>Learn Protocol</h3>
+                        <p>Read the RABB1TS Protocol to understand how the system works.</p>
+                        <a href="{{ url_for('protocol') }}" class="btn btn-secondary">Read Protocol</a>
+                    </div>
+                    
+                    <div class="feature-card">
+                        <div class="feature-icon">⛏️</div>
+                        <h3>Start Mining</h3>
+                        <p>Download Nicesigner to start mining your transactions and earning rewards.</p>
+                        <a href="https://github.com/bittoshimoto/Rabb1ts/" class="btn btn-secondary" target="_blank">Get Nicesigner</a>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="recent-hashes">
+            <div class="container">
+                <h2>Recent RABB1TS Hashes</h2>
+                <div class="table-container">
+                    <table class="modern-table">
+                        <thead>
+                            <tr>
+                                <th>Block</th>
+                                <th>Transaction ID</th>
+                                <th>Reward</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for reward in rewards %}
+                            <tr>
+                                <td><span class="block-number">{{ reward["height"] }}</span></td>
+                                <td class="txid-cell">{{ display_utxo(reward["txid"], True) | safe }}</td>
+                                <td class="reward-cell">{{ display_quantity(reward["reward"]) }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <section class="support-section">
+            <div class="container">
+                <div class="support-grid">
+                    <div class="support-card">
+                        <h3>Support Development</h3>
+                        <p>Help us maintain and improve the RABB1TS ecosystem:</p>
+                        <div class="donation-address">
+                            <code>BQEJpqsrKVGdDriCo3msLRwXbBuzf2f6nw</code>
+                            <button class="copy-btn" onclick="copyToClipboard('BQEJpqsrKVGdDriCo3msLRwXbBuzf2f6nw')">📋</button>
+                        </div>
+                        <div class="social-links">
+                            <a href="https://x.com/bittoshimo" target="_blank" class="social-link">Follow on X/Twitter</a>
+                        </div>
+                    </div>
+                    
+                    <div class="support-card">
+                        <h3>Support Server Hosting</h3>
+                        <p>Help us keep the RABB1TS server running smoothly:</p>
+                        <div class="donation-address">
+                            <code>BPfYrjLdM4X6LcrZJp2g2x88ah98AwH7LE</code>
+                            <button class="copy-btn" onclick="copyToClipboard('BPfYrjLdM4X6LcrZJp2g2x88ah98AwH7LE')">📋</button>
+                        </div>
+                    </div>
+                </div>
             </div>
         </section>
     </main>
@@ -86,6 +182,23 @@
     
     </div>  <!-- top -->
 
+    <script>
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(function() {
+                // Show a temporary success message
+                const btn = event.target;
+                const originalText = btn.textContent;
+                btn.textContent = '✅';
+                btn.style.color = '#10b981';
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                    btn.style.color = '';
+                }, 2000);
+            }).catch(function(err) {
+                console.error('Could not copy text: ', err);
+            });
+        }
+    </script>
 
 </body>
 </html>
